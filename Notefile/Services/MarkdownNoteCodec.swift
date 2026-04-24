@@ -55,6 +55,10 @@ enum MarkdownNoteCodec {
                     let rawValue = String(line.dropFirst(9)).trimmingCharacters(in: .whitespacesAndNewlines)
                     metadata.accentStyle = AccentStyle(rawValue: rawValue) ?? metadata.accentStyle
                     cursor += 1
+                } else if line.hasPrefix("- Favorite: ") {
+                    let rawValue = String(line.dropFirst(12)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    metadata.isFavorite = (rawValue as NSString).boolValue
+                    cursor += 1
                 } else if line.isEmpty {
                     cursor += 1
                 } else {
@@ -101,6 +105,7 @@ enum MarkdownNoteCodec {
             metadataHeading,
             "- Emoji: \(note.metadata.emoji.ifBlank(NoteMetadata.default.emoji))",
             "- Color: \(note.metadata.accentStyle.rawValue)",
+            "- Favorite: \(note.metadata.isFavorite ? "true" : "false")",
             ""
         ]
 

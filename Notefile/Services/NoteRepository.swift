@@ -195,6 +195,29 @@ final class NoteRepository: ObservableObject {
         }
     }
 
+    func setFavorite(_ isFavorite: Bool, for item: BrowserItem) throws {
+        switch item.kind {
+        case .folder:
+            let folderURL = try folderURL(for: item.relativePath)
+            var metadata = loadFolderMetadata(at: folderURL) ?? .default
+            metadata.isFavorite = isFavorite
+            try saveFolderMetadata(metadata, at: folderURL)
+            let modifiedAt = (try? folderURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
+            queueCloudSync("favoriteFolder") { repository in
+                try await repository.uploadFolder(relativePath: item.relativePath, metadata: metadata, modifiedAt: modifiedAt)
+            }
+        case .note:
+            var note = try loadNote(relativePath: item.relativePath)
+            note.metadata.isFavorite = isFavorite
+            try persistNotePackage(note: note, modifiedAt: nil)
+            queueCloudSync("favoriteNote") { repository in
+                try await repository.uploadNote(note)
+            }
+        }
+
+        try reloadLocalBrowser()
+    }
+
     func exportCombinedMarkdown(relativePath: String) throws -> String {
         var note = try loadNote(relativePath: relativePath)
         note.entries = persistedEntries(from: note.entries)
@@ -633,6 +656,7 @@ final class NoteRepository: ObservableObject {
                             name: url.deletingPathExtension().lastPathComponent,
                             emoji: metadata.emoji,
                             accentStyle: metadata.accentStyle,
+                            isFavorite: metadata.isFavorite,
                             modifiedAt: (try? notePackageModificationDate(at: url)) ?? .distantPast,
                             children: []
                         )
@@ -646,6 +670,7 @@ final class NoteRepository: ObservableObject {
                             name: component,
                             emoji: metadata.emoji,
                             accentStyle: metadata.accentStyle,
+                            isFavorite: metadata.isFavorite,
                             modifiedAt: values.contentModificationDate ?? .distantPast,
                             children: try loadFolderContents(at: url, relativePath: itemRelativePath)
                         )
@@ -667,6 +692,7 @@ final class NoteRepository: ObservableObject {
                     name: url.deletingPathExtension().lastPathComponent,
                     emoji: metadata.emoji,
                     accentStyle: metadata.accentStyle,
+                    isFavorite: metadata.isFavorite,
                     modifiedAt: values.contentModificationDate ?? .distantPast,
                     children: []
                 )
@@ -1111,6 +1137,7 @@ final class NoteRepository: ObservableObject {
         record["parentPath"] = parentPath(for: relativePath) as CKRecordValue?
         record["emoji"] = metadata.emoji as CKRecordValue
         record["accentStyle"] = metadata.accentStyle.rawValue as CKRecordValue
+        record["isFavorite"] = NSNumber(value: metadata.isFavorite)
         record["modifiedAt"] = modifiedAt as CKRecordValue
         try await modifyRecords(saving: [record], deleting: [])
     }
@@ -1124,6 +1151,7 @@ final class NoteRepository: ObservableObject {
         noteRecord["parentPath"] = parentPath(for: note.relativePath) as CKRecordValue?
         noteRecord["emoji"] = note.metadata.emoji as CKRecordValue
         noteRecord["accentStyle"] = note.metadata.accentStyle.rawValue as CKRecordValue
+        noteRecord["isFavorite"] = NSNumber(value: note.metadata.isFavorite)
         noteRecord["modifiedAt"] = noteModifiedAt as CKRecordValue
 
         let persistedEntries = persistedEntries(from: note.entries)
@@ -1344,7 +1372,8 @@ final class NoteRepository: ObservableObject {
             relativePath: relativePath,
             metadata: FolderMetadata(
                 emoji: (record["emoji"] as? String)?.ifBlank("📁") ?? "📁",
-                accentStyle: AccentStyle(rawValue: record["accentStyle"] as? String ?? "") ?? .sky
+                accentStyle: AccentStyle(rawValue: record["accentStyle"] as? String ?? "") ?? .sky,
+                isFavorite: cloudBoolValue(record["isFavorite"])
             ),
             modifiedAt: (record["modifiedAt"] as? Date) ?? record.modificationDate ?? .distantPast
         )
@@ -1358,7 +1387,8 @@ final class NoteRepository: ObservableObject {
             title: title,
             metadata: NoteMetadata(
                 emoji: (record["emoji"] as? String)?.ifBlank("📝") ?? "📝",
-                accentStyle: AccentStyle(rawValue: record["accentStyle"] as? String ?? "") ?? .mint
+                accentStyle: AccentStyle(rawValue: record["accentStyle"] as? String ?? "") ?? .mint,
+                isFavorite: cloudBoolValue(record["isFavorite"])
             ),
             modifiedAt: (record["modifiedAt"] as? Date) ?? record.modificationDate ?? .distantPast
         )
@@ -1377,6 +1407,16 @@ final class NoteRepository: ObservableObject {
             timestamp: (record["timestamp"] as? Date) ?? record.modificationDate ?? .distantPast,
             text: (record["text"] as? String) ?? ""
         )
+    }
+
+    private func cloudBoolValue(_ value: CKRecordValue?) -> Bool {
+        if let bool = value as? Bool {
+            return bool
+        }
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+        return false
     }
 
     private func directoryDepth(of relativePath: String) -> Int {

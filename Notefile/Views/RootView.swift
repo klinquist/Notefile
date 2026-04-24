@@ -70,16 +70,36 @@ enum NoteFontOption: String, CaseIterable, Identifiable {
 #endif
 }
 
+enum BrowserDisplayMode: String, CaseIterable, Identifiable {
+    case cards
+    case list
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .cards: "Cards"
+        case .list: "List"
+        }
+    }
+}
+
 enum AppPreferences {
     static let newEntryThresholdMinutesKey = "Settings.NewEntryThresholdMinutes"
     static let noteFontSizeKey = "Settings.NoteFontSize"
     static let noteFontKey = "Settings.NoteFont"
+    static let browserCardSizeKey = "Settings.BrowserCardSize"
+    static let browserDisplayModeKey = "Settings.BrowserDisplayMode"
 
     static let defaultNewEntryThresholdMinutes = 0
     static let defaultNoteFontSize = 17.0
     static let defaultNoteFont = NoteFontOption.system
+    static let defaultBrowserCardSize = 160.0
+    static let defaultBrowserDisplayMode = BrowserDisplayMode.cards
     static let minimumNoteFontSize = 12.0
     static let maximumNoteFontSize = 30.0
+    static let minimumBrowserCardSize = 112.0
+    static let maximumBrowserCardSize = 230.0
 
     static func normalizedNewEntryThresholdMinutes(_ value: Int) -> Int {
         min(max(value, 0), 60)
@@ -91,6 +111,14 @@ enum AppPreferences {
 
     static func normalizedNoteFont(_ value: String) -> NoteFontOption {
         NoteFontOption(rawValue: value) ?? defaultNoteFont
+    }
+
+    static func normalizedBrowserCardSize(_ value: Double) -> Double {
+        min(max(value, minimumBrowserCardSize), maximumBrowserCardSize)
+    }
+
+    static func normalizedBrowserDisplayMode(_ value: String) -> BrowserDisplayMode {
+        BrowserDisplayMode(rawValue: value) ?? defaultBrowserDisplayMode
     }
 
     static func currentNewEntryThresholdMinutes() -> Int {
@@ -111,6 +139,12 @@ struct NotefileSettingsView: View {
     @AppStorage(AppPreferences.noteFontKey)
     private var noteFontRawValue = AppPreferences.defaultNoteFont.rawValue
 
+    @AppStorage(AppPreferences.browserCardSizeKey)
+    private var browserCardSize = AppPreferences.defaultBrowserCardSize
+
+    @AppStorage(AppPreferences.browserDisplayModeKey)
+    private var browserDisplayModeRawValue = AppPreferences.defaultBrowserDisplayMode.rawValue
+
 #if os(macOS)
     @EnvironmentObject private var localMirrorSyncService: LocalMirrorSyncService
 #endif
@@ -118,6 +152,7 @@ struct NotefileSettingsView: View {
     var body: some View {
         Form {
             notesSection
+            browserSection
 
 #if os(macOS)
             mirrorSection
@@ -165,6 +200,37 @@ struct NotefileSettingsView: View {
 
                 Text("Preview note font")
                     .font(noteFont.swiftUIFont(size: fontSizeBinding.wrappedValue))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private var browserSection: some View {
+        Section("Browser") {
+            Picker("View Style", selection: browserDisplayModeBinding) {
+                ForEach(BrowserDisplayMode.allCases) { mode in
+                    Text(mode.label)
+                        .tag(mode.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            VStack(alignment: .leading, spacing: 10) {
+                LabeledContent("Card Size") {
+                    Text("\(Int(browserCardSizeBinding.wrappedValue.rounded()))")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+
+                Slider(
+                    value: browserCardSizeBinding,
+                    in: AppPreferences.minimumBrowserCardSize...AppPreferences.maximumBrowserCardSize,
+                    step: 1
+                )
+
+                Text("Smaller cards fit more folders and notes on screen.")
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
             }
             .padding(.vertical, 4)
@@ -233,6 +299,20 @@ struct NotefileSettingsView: View {
         Binding(
             get: { AppPreferences.normalizedNoteFontSize(noteFontSize) },
             set: { noteFontSize = AppPreferences.normalizedNoteFontSize($0) }
+        )
+    }
+
+    private var browserCardSizeBinding: Binding<Double> {
+        Binding(
+            get: { AppPreferences.normalizedBrowserCardSize(browserCardSize) },
+            set: { browserCardSize = AppPreferences.normalizedBrowserCardSize($0) }
+        )
+    }
+
+    private var browserDisplayModeBinding: Binding<String> {
+        Binding(
+            get: { AppPreferences.normalizedBrowserDisplayMode(browserDisplayModeRawValue).rawValue },
+            set: { browserDisplayModeRawValue = AppPreferences.normalizedBrowserDisplayMode($0).rawValue }
         )
     }
 
@@ -306,10 +386,12 @@ struct RootView: View {
                 title: currentFolderName ?? "Notefile",
                 subtitle: currentFolderName == nil ? repository.storageDescription : nil,
                 items: sortedItems(in: currentFolderPath),
+                favoriteItems: sortedFavoriteItems,
                 sortMode: sortMode,
                 sortSelection: sortSelection,
                 onSelect: openItem,
                 onRequestDelete: { itemPendingDeletion = $0 },
+                onToggleFavorite: toggleFavorite,
                 onCreateFolder: { showingCreateFolder = true },
                 onCreateNote: { showingCreateNote = true },
                 onOpenSettings: { showingSettings = true },
@@ -329,10 +411,12 @@ struct RootView: View {
                         title: URL(fileURLWithPath: relativePath).lastPathComponent,
                         subtitle: nil,
                         items: sortedItems(in: relativePath),
+                        favoriteItems: [],
                         sortMode: sortMode,
                         sortSelection: sortSelection,
                         onSelect: openItem,
                         onRequestDelete: { itemPendingDeletion = $0 },
+                        onToggleFavorite: toggleFavorite,
                         onCreateFolder: { showingCreateFolder = true },
                         onCreateNote: { showingCreateNote = true },
                         onOpenSettings: nil,
@@ -472,6 +556,14 @@ struct RootView: View {
 
     private func sortedItems(in folderPath: String?) -> [BrowserItem] {
         let items = itemsInFolder(folderPath)
+        return sorted(items)
+    }
+
+    private var sortedFavoriteItems: [BrowserItem] {
+        sorted(flattenedItems(repository.browserItems).filter(\.isFavorite))
+    }
+
+    private func sorted(_ items: [BrowserItem]) -> [BrowserItem] {
         switch sortMode {
         case .alphabetical:
             return items.sorted { lhs, rhs in
@@ -490,6 +582,12 @@ struct RootView: View {
                 }
                 return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }
+        }
+    }
+
+    private func flattenedItems(_ items: [BrowserItem]) -> [BrowserItem] {
+        items.flatMap { item in
+            [item] + flattenedItems(item.children)
         }
     }
 
@@ -613,6 +711,18 @@ struct RootView: View {
         }
     }
 
+    private func toggleFavorite(_ item: BrowserItem) {
+        Task {
+            do {
+                try repository.setFavorite(!item.isFavorite, for: item)
+            } catch {
+                await MainActor.run {
+                    repository.lastErrorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
     private func deleteConfirmationTitle(for item: BrowserItem) -> String {
         switch item.kind {
         case .folder:
@@ -657,10 +767,12 @@ private struct BrowserGridScreen: View {
     let title: String
     let subtitle: String?
     let items: [BrowserItem]
+    let favoriteItems: [BrowserItem]
     let sortMode: RootView.SortMode
     let sortSelection: Binding<RootView.SortMode>
     let onSelect: (BrowserItem) -> Void
     let onRequestDelete: (BrowserItem) -> Void
+    let onToggleFavorite: (BrowserItem) -> Void
     let onCreateFolder: () -> Void
     let onCreateNote: () -> Void
     let onOpenSettings: (() -> Void)?
@@ -678,11 +790,8 @@ private struct BrowserGridScreen: View {
     @State private var searchQuery = ""
     @State private var searchResults: [NoteSearchResult] = []
     @FocusState private var isTitleFieldFocused: Bool
-
-    private let columns = [
-        GridItem(.flexible(), spacing: 16),
-        GridItem(.flexible(), spacing: 16)
-    ]
+    @AppStorage(AppPreferences.browserCardSizeKey) private var browserCardSize = AppPreferences.defaultBrowserCardSize
+    @AppStorage(AppPreferences.browserDisplayModeKey) private var browserDisplayModeRawValue = AppPreferences.defaultBrowserDisplayMode.rawValue
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -699,25 +808,15 @@ private struct BrowserGridScreen: View {
 
                 if isShowingSearchResults {
                     searchResultsContent
-                } else if items.isEmpty {
-                    emptyState
                 } else {
-                    LazyVGrid(columns: columns, spacing: 16) {
-                        ForEach(items) { item in
-                            Button {
-                                onSelect(item)
-                            } label: {
-                                BrowserTile(item: item)
-                            }
-                            .buttonStyle(.plain)
-                            .contextMenu {
-                                Button(role: .destructive) {
-                                    onRequestDelete(item)
-                                } label: {
-                                    Label(item.kind == .folder ? "Delete Folder" : "Delete Note", systemImage: "trash")
-                                }
-                            }
-                        }
+                    if isRoot, !favoriteItems.isEmpty {
+                        favoritesSection
+                    }
+
+                    if items.isEmpty {
+                        emptyState
+                    } else {
+                        itemCollection(items)
                     }
                 }
 #if os(iOS)
@@ -886,6 +985,82 @@ private struct BrowserGridScreen: View {
 #endif
             }
 #endif
+        }
+    }
+
+    private var displayMode: BrowserDisplayMode {
+        AppPreferences.normalizedBrowserDisplayMode(browserDisplayModeRawValue)
+    }
+
+    private var resolvedCardSize: Double {
+        AppPreferences.normalizedBrowserCardSize(browserCardSize)
+    }
+
+    private var columns: [GridItem] {
+        [
+            GridItem(
+                .adaptive(
+                    minimum: CGFloat(resolvedCardSize),
+                    maximum: CGFloat(resolvedCardSize + 84)
+                ),
+                spacing: 16
+            )
+        ]
+    }
+
+    private var favoritesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Favorites")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.primary)
+
+            itemCollection(favoriteItems)
+        }
+        .padding(.top, 2)
+    }
+
+    @ViewBuilder
+    private func itemCollection(_ items: [BrowserItem]) -> some View {
+        switch displayMode {
+        case .cards:
+            LazyVGrid(columns: columns, spacing: 16) {
+                ForEach(items) { item in
+                    itemButton(item)
+                }
+            }
+        case .list:
+            LazyVStack(spacing: 10) {
+                ForEach(items) { item in
+                    itemButton(item)
+                }
+            }
+        }
+    }
+
+    private func itemButton(_ item: BrowserItem) -> some View {
+        Button {
+            onSelect(item)
+        } label: {
+            switch displayMode {
+            case .cards:
+                BrowserTile(item: item, cardSize: resolvedCardSize)
+            case .list:
+                BrowserListRow(item: item)
+            }
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                onToggleFavorite(item)
+            } label: {
+                Label(item.isFavorite ? "Remove Favorite" : "Favorite", systemImage: item.isFavorite ? "star.slash" : "star")
+            }
+
+            Button(role: .destructive) {
+                onRequestDelete(item)
+            } label: {
+                Label(item.kind == .folder ? "Delete Folder" : "Delete Note", systemImage: "trash")
+            }
         }
     }
 
@@ -1295,15 +1470,24 @@ private struct NoteSearchResultRow: View {
 
 private struct BrowserTile: View {
     let item: BrowserItem
+    let cardSize: Double
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 Text(item.emoji)
-                    .font(.system(size: 30))
+                    .font(.system(size: emojiSize))
                 Spacer()
-                Image(systemName: item.kind == .folder ? "folder.fill" : "note.text")
-                    .foregroundStyle(item.accentStyle.color)
+                VStack(alignment: .trailing, spacing: 6) {
+                    if item.isFavorite {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.yellow)
+                    }
+
+                    Image(systemName: item.kind == .folder ? "folder.fill" : "note.text")
+                        .foregroundStyle(item.accentStyle.color)
+                }
             }
 
             Spacer()
@@ -1319,9 +1503,9 @@ private struct BrowserTile: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(16)
+        .padding(tilePadding)
         .frame(maxWidth: .infinity)
-        .frame(minHeight: 160)
+        .frame(minHeight: CGFloat(cardSize))
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(item.accentStyle.color.opacity(0.14))
@@ -1334,6 +1518,72 @@ private struct BrowserTile: View {
     }
 
     private var tileSubtitle: String {
+        switch item.kind {
+        case .folder:
+            return "Folder"
+        case .note:
+            return RelativeDateTimeFormatter().localizedString(for: item.modifiedAt, relativeTo: Date())
+        }
+    }
+
+    private var emojiSize: CGFloat {
+        CGFloat(min(max(cardSize * 0.19, 22), 34))
+    }
+
+    private var tilePadding: CGFloat {
+        CGFloat(min(max(cardSize * 0.10, 12), 18))
+    }
+}
+
+private struct BrowserListRow: View {
+    let item: BrowserItem
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Text(item.emoji)
+                .font(.system(size: 26))
+                .frame(width: 42, height: 42)
+                .background(item.accentStyle.color.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(item.name)
+                        .font(.headline)
+                        .lineLimit(1)
+
+                    if item.isFavorite {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.yellow)
+                    }
+                }
+
+                Text(rowSubtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            Image(systemName: item.kind == .folder ? "folder.fill" : "note.text")
+                .foregroundStyle(item.accentStyle.color)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(item.accentStyle.color.opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(item.accentStyle.color.opacity(0.16), lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var rowSubtitle: String {
         switch item.kind {
         case .folder:
             return "Folder"

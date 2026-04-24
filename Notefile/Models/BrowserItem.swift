@@ -11,6 +11,7 @@ struct BrowserItem: Identifiable, Hashable {
     let name: String
     let emoji: String
     let accentStyle: AccentStyle
+    let isFavorite: Bool
     let modifiedAt: Date
     let children: [BrowserItem]
 
