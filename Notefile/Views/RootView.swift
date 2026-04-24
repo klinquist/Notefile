@@ -84,6 +84,24 @@ enum BrowserDisplayMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum BrowserCardSizeOption: Double, CaseIterable, Identifiable {
+    case small = 120
+    case medium = 145
+    case large = 170
+    case extraLarge = 215
+
+    var id: Double { rawValue }
+
+    var label: String {
+        switch self {
+        case .small: "Small"
+        case .medium: "Medium"
+        case .large: "Large"
+        case .extraLarge: "XL"
+        }
+    }
+}
+
 enum AppPreferences {
     static let newEntryThresholdMinutesKey = "Settings.NewEntryThresholdMinutes"
     static let noteFontSizeKey = "Settings.NoteFontSize"
@@ -94,12 +112,10 @@ enum AppPreferences {
     static let defaultNewEntryThresholdMinutes = 0
     static let defaultNoteFontSize = 17.0
     static let defaultNoteFont = NoteFontOption.system
-    static let defaultBrowserCardSize = 160.0
+    static let defaultBrowserCardSize = BrowserCardSizeOption.large.rawValue
     static let defaultBrowserDisplayMode = BrowserDisplayMode.cards
     static let minimumNoteFontSize = 12.0
     static let maximumNoteFontSize = 30.0
-    static let minimumBrowserCardSize = 112.0
-    static let maximumBrowserCardSize = 230.0
 
     static func normalizedNewEntryThresholdMinutes(_ value: Int) -> Int {
         min(max(value, 0), 60)
@@ -114,7 +130,9 @@ enum AppPreferences {
     }
 
     static func normalizedBrowserCardSize(_ value: Double) -> Double {
-        min(max(value, minimumBrowserCardSize), maximumBrowserCardSize)
+        BrowserCardSizeOption.allCases.min { first, second in
+            abs(first.rawValue - value) < abs(second.rawValue - value)
+        }?.rawValue ?? defaultBrowserCardSize
     }
 
     static func normalizedBrowserDisplayMode(_ value: String) -> BrowserDisplayMode {
@@ -216,24 +234,20 @@ struct NotefileSettingsView: View {
             }
             .pickerStyle(.segmented)
 
-            VStack(alignment: .leading, spacing: 10) {
-                LabeledContent("Card Size") {
-                    Text("\(Int(browserCardSizeBinding.wrappedValue.rounded()))")
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
+            if AppPreferences.normalizedBrowserDisplayMode(browserDisplayModeRawValue) == .cards {
+                Picker("Card Size", selection: browserCardSizeBinding) {
+                    ForEach(BrowserCardSizeOption.allCases) { size in
+                        Text(size.label)
+                            .tag(size.rawValue)
+                    }
                 }
-
-                Slider(
-                    value: browserCardSizeBinding,
-                    in: AppPreferences.minimumBrowserCardSize...AppPreferences.maximumBrowserCardSize,
-                    step: 1
-                )
+                .pickerStyle(.segmented)
 
                 Text("Smaller cards fit more folders and notes on screen.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
         }
     }
 
