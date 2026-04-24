@@ -1,10 +1,16 @@
 # Notefile
 
-![Notefile icon](image.png)
-
-Notefile is a SwiftUI note-taking app for iPhone, iPad, and Mac built for fast capture while you are on the go.
-
-It stores notes in iCloud Drive when available, keeps each note append-first, and on macOS can mirror the same note tree into a normal folder on your filesystem.
+<table>
+  <tr>
+    <td width="220" valign="top">
+      <img src="image.png" alt="Notefile icon" width="180" />
+    </td>
+    <td valign="top">
+      <p>Notefile is a SwiftUI note-taking app for iPhone, iPad, and Mac built for fast capture while you are on the go.</p>
+      <p>It stores notes in iCloud Drive when available, keeps each note append-first, and on macOS can mirror the same note tree into a normal folder on your filesystem.</p>
+    </td>
+  </tr>
+</table>
 
 ## Highlights
 
