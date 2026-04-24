@@ -950,9 +950,10 @@ final class NoteRepository: ObservableObject {
     private func refreshCloudCache() async throws {
         guard try await cloudAccountIsAvailable() else { return }
 
-        let folderRecords = try await fetchAllRecords(recordType: Self.folderRecordType)
-        let noteRecords = try await fetchAllRecords(recordType: Self.noteRecordType)
-        let entryRecords = try await fetchAllRecords(recordType: Self.entryRecordType)
+        let cloudRecords = try await fetchAllCloudRecords()
+        let folderRecords = cloudRecords.filter { $0.recordType == Self.folderRecordType }
+        let noteRecords = cloudRecords.filter { $0.recordType == Self.noteRecordType }
+        let entryRecords = cloudRecords.filter { $0.recordType == Self.entryRecordType }
         let rootURL = try storageRootURL()
 
         if fileManager.fileExists(atPath: rootURL.path) {
@@ -1103,9 +1104,10 @@ final class NoteRepository: ObservableObject {
 
     private func deleteCloudTree(relativePath: String) async throws {
         guard try await cloudAccountIsAvailable() else { return }
-        let folderRecords = try await fetchAllRecords(recordType: Self.folderRecordType)
-        let noteRecords = try await fetchAllRecords(recordType: Self.noteRecordType)
-        let entryRecords = try await fetchAllRecords(recordType: Self.entryRecordType)
+        let cloudRecords = try await fetchAllCloudRecords()
+        let folderRecords = cloudRecords.filter { $0.recordType == Self.folderRecordType }
+        let noteRecords = cloudRecords.filter { $0.recordType == Self.noteRecordType }
+        let entryRecords = cloudRecords.filter { $0.recordType == Self.entryRecordType }
 
         let folderIDs = folderRecords
             .compactMap { record -> CKRecord.ID? in
@@ -1153,7 +1155,8 @@ final class NoteRepository: ObservableObject {
     }
 
     private func fetchCloudEntries(relativePath: String) async throws -> [CloudEntrySnapshot] {
-        try await fetchAllRecords(recordType: Self.entryRecordType)
+        try await fetchAllCloudRecords()
+            .filter { $0.recordType == Self.entryRecordType }
             .compactMap(entrySnapshot(from:))
             .filter { $0.notePath == relativePath }
     }
@@ -1201,51 +1204,24 @@ final class NoteRepository: ObservableObject {
         return CKRecord(recordType: recordType, recordID: recordID(recordType: recordType, key: key))
     }
 
-    private func fetchAllRecords(recordType: String) async throws -> [CKRecord] {
-        do {
-            return try await fetchRecords(operation: CKQueryOperation(query: CKQuery(recordType: recordType, predicate: NSPredicate(value: true))))
-        } catch {
-            guard isMissingCloudKitRecordTypeError(error) else {
-                throw error
+    private func fetchAllCloudRecords() async throws -> [CKRecord] {
+        var records: [CKRecord] = []
+        var changeToken: CKServerChangeToken?
+        var moreComing = true
+
+        while moreComing {
+            let changes = try await privateDatabase.recordZoneChanges(
+                inZoneWith: .default,
+                since: changeToken
+            )
+            for result in changes.modificationResultsByID.values {
+                records.append(try result.get().record)
             }
-            logger.info("fetchAllRecords missing CloudKit recordType=\(recordType, privacy: .public); treating as empty")
-            return []
+            changeToken = changes.changeToken
+            moreComing = changes.moreComing
         }
-    }
 
-    private func fetchRecords(operation: CKQueryOperation) async throws -> [CKRecord] {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[CKRecord], Error>) in
-            var records: [CKRecord] = []
-
-            operation.recordMatchedBlock = { _, result in
-                if case let .success(record) = result {
-                    records.append(record)
-                }
-            }
-
-            operation.queryResultBlock = { [weak self] result in
-                guard let self else { return }
-                switch result {
-                case let .success(cursor):
-                    if let cursor {
-                        Task {
-                            do {
-                                let nextRecords = try await self.fetchRecords(operation: CKQueryOperation(cursor: cursor))
-                                continuation.resume(returning: records + nextRecords)
-                            } catch {
-                                continuation.resume(throwing: error)
-                            }
-                        }
-                    } else {
-                        continuation.resume(returning: records)
-                    }
-                case let .failure(error):
-                    continuation.resume(throwing: error)
-                }
-            }
-
-            privateDatabase.add(operation)
-        }
+        return records
     }
 
     private func modifyRecords(saving recordsToSave: [CKRecord], deleting recordIDsToDelete: [CKRecord.ID]) async throws {
@@ -1277,11 +1253,6 @@ final class NoteRepository: ObservableObject {
     private func sha256(_ value: String) -> String {
         let digest = SHA256.hash(data: Data(value.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
-    }
-
-    private func isMissingCloudKitRecordTypeError(_ error: Error) -> Bool {
-        let description = (error as NSError).localizedDescription
-        return description.localizedCaseInsensitiveContains("Did not find record type")
     }
 
     private func folderSnapshot(from record: CKRecord) -> CloudFolderSnapshot? {
