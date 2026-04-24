@@ -6,8 +6,8 @@
       <img src="image.png" alt="Notefile icon" width="180" />
     </td>
     <td valign="top">
-      <p>Notefile is a SwiftUI note-taking app for iPhone, iPad, and Mac built for fast capture while you are on the go.</p>
-      <p>It syncs notes through CloudKit when iCloud is available, keeps each note append-first, and on macOS can mirror the same note tree into a normal folder on your filesystem.</p>
+      <p>Notefile is a simple notes app built for organizing quick project thoughts into folders, notes, and timeline-style entries, then keeping them synchronized across Mac, iPhone, and iPad with iCloud.</p>
+      <p>Notes are also mirrored to the local filesystem as Markdown files, making them easy to read, back up, edit, or use with project management agents and other developer workflows.</p>
     </td>
   </tr>
 </table>
