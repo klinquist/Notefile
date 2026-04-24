@@ -1202,7 +1202,15 @@ final class NoteRepository: ObservableObject {
     }
 
     private func fetchAllRecords(recordType: String) async throws -> [CKRecord] {
-        try await fetchRecords(operation: CKQueryOperation(query: CKQuery(recordType: recordType, predicate: NSPredicate(value: true))))
+        do {
+            return try await fetchRecords(operation: CKQueryOperation(query: CKQuery(recordType: recordType, predicate: NSPredicate(value: true))))
+        } catch {
+            guard isMissingCloudKitRecordTypeError(error) else {
+                throw error
+            }
+            logger.info("fetchAllRecords missing CloudKit recordType=\(recordType, privacy: .public); treating as empty")
+            return []
+        }
     }
 
     private func fetchRecords(operation: CKQueryOperation) async throws -> [CKRecord] {
@@ -1269,6 +1277,11 @@ final class NoteRepository: ObservableObject {
     private func sha256(_ value: String) -> String {
         let digest = SHA256.hash(data: Data(value.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func isMissingCloudKitRecordTypeError(_ error: Error) -> Bool {
+        let description = (error as NSError).localizedDescription
+        return description.localizedCaseInsensitiveContains("Did not find record type")
     }
 
     private func folderSnapshot(from record: CKRecord) -> CloudFolderSnapshot? {
