@@ -52,6 +52,7 @@ final class NoteRepository: ObservableObject {
     private let encoder = JSONEncoder()
     private var cachedRootURL: URL?
     private var cloudRecordZoneIsReady = false
+    private var cloudSyncTail: Task<Void, Never>?
     private let logger = Logger(subsystem: "com.linquist.notefile", category: "NoteRepository")
 
     init() {
@@ -65,8 +66,14 @@ final class NoteRepository: ObservableObject {
     func loadBrowser() async {
         do {
             try await refreshCloudCache()
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            logger.error("loadBrowser cloud refresh failed error=\(error.localizedDescription, privacy: .public)")
+        }
+
+        do {
+            try reloadLocalBrowser()
             let rootURL = try storageRootURL()
-            browserItems = try loadFolderContents(at: rootURL, relativePath: nil)
             lastErrorMessage = nil
             logger.info("loadBrowser completed root=\(rootURL.path, privacy: .public) items=\(self.browserItems.count)")
         } catch {
@@ -102,10 +109,14 @@ final class NoteRepository: ObservableObject {
         try fileManager.createDirectory(at: folderURL, withIntermediateDirectories: true)
         let metadata = FolderMetadata(emoji: emoji.ifBlank("📁"), accentStyle: accentStyle)
         try saveFolderMetadata(metadata, at: folderURL)
-        try await uploadFolder(relativePath: self.relativePath(for: folderURL), metadata: metadata, modifiedAt: Date())
-        logger.info("createFolder parent=\(parentRelativePath ?? "<root>", privacy: .public) folder=\(self.relativePath(for: folderURL), privacy: .public)")
-        await loadBrowser()
-        return self.relativePath(for: folderURL)
+        let relativePath = self.relativePath(for: folderURL)
+        let modifiedAt = Date()
+        queueCloudSync("createFolder") { repository in
+            try await repository.uploadFolder(relativePath: relativePath, metadata: metadata, modifiedAt: modifiedAt)
+        }
+        logger.info("createFolder parent=\(parentRelativePath ?? "<root>", privacy: .public) folder=\(relativePath, privacy: .public)")
+        try reloadLocalBrowser()
+        return relativePath
     }
 
     func renameFolder(relativePath: String, name: String) async throws -> String {
@@ -125,10 +136,12 @@ final class NoteRepository: ObservableObject {
         }
 
         let updatedRelativePath = self.relativePath(for: targetURL)
-        try await deleteCloudTree(relativePath: relativePath)
-        try await uploadFolderTree(at: targetURL)
+        queueCloudSync("renameFolder") { repository in
+            try await repository.deleteCloudTree(relativePath: relativePath)
+            try await repository.uploadFolderTree(at: targetURL)
+        }
         logger.info("renameFolder from=\(relativePath, privacy: .public) to=\(updatedRelativePath, privacy: .public)")
-        await loadBrowser()
+        try reloadLocalBrowser()
         return updatedRelativePath
     }
 
@@ -146,9 +159,11 @@ final class NoteRepository: ObservableObject {
             entries: []
         )
         try persistNotePackage(note: note, modifiedAt: nil)
-        try await uploadNote(note)
+        queueCloudSync("createNote") { repository in
+            try await repository.uploadNote(note)
+        }
         logger.info("createNote parent=\(parentRelativePath ?? "<root>", privacy: .public) note=\(relativePath, privacy: .public)")
-        await loadBrowser()
+        try reloadLocalBrowser()
         return relativePath
     }
 
@@ -157,22 +172,27 @@ final class NoteRepository: ObservableObject {
         case .folder:
             let itemURL = try folderURL(for: item.relativePath)
             guard fileManager.fileExists(atPath: itemURL.path) else {
-                await loadBrowser()
+                try reloadLocalBrowser()
                 return
             }
             try fileManager.removeItem(at: itemURL)
-            try await deleteCloudTree(relativePath: item.relativePath)
+            let relativePath = item.relativePath
+            queueCloudSync("deleteFolder") { repository in
+                try await repository.deleteCloudTree(relativePath: relativePath)
+            }
         case .note:
             try await deleteNote(relativePath: item.relativePath)
         }
 
-        await loadBrowser()
+        try reloadLocalBrowser()
     }
 
     func deleteNote(relativePath: String) async throws {
         logger.notice("deleteNote relativePath=\(relativePath, privacy: .public)")
         try removeNoteStorageIfExists(relativePath: relativePath)
-        try await deleteCloudNote(relativePath: relativePath)
+        queueCloudSync("deleteNote") { repository in
+            try await repository.deleteCloudNote(relativePath: relativePath)
+        }
     }
 
     func exportCombinedMarkdown(relativePath: String) throws -> String {
@@ -334,22 +354,49 @@ final class NoteRepository: ObservableObject {
         savedNote.entries = normalizeEntries(savedNote.entries)
         try persistNotePackage(note: savedNote, modifiedAt: sourceModifiedAt)
         try cleanupLegacyArtifacts(for: savedNote.relativePath)
-        try await uploadNote(savedNote, modifiedAt: sourceModifiedAt)
         let persistedEntryCount = persistedEntries(from: savedNote.entries).count
         logger.info("save note original=\(originalRelativePath, privacy: .public) saved=\(savedNote.relativePath, privacy: .public) entries=\(savedNote.entries.count) persistedEntries=\(persistedEntryCount)")
 
         if originalRelativePath != savedNote.relativePath {
             try removeNoteStorageIfExists(relativePath: originalRelativePath)
-            try await deleteCloudNote(relativePath: originalRelativePath)
         } else if fileManager.fileExists(atPath: try legacyNoteURL(for: savedNote.relativePath).path) {
             try cleanupLegacyArtifacts(for: savedNote.relativePath)
         }
 
+        queueCloudSync("saveNote") { repository in
+            try await repository.uploadNote(savedNote, modifiedAt: sourceModifiedAt)
+            if originalRelativePath != savedNote.relativePath {
+                try await repository.deleteCloudNote(relativePath: originalRelativePath)
+            }
+        }
+
         if reloadBrowser {
-            Task { await loadBrowser() }
+            try reloadLocalBrowser()
         }
 
         return savedNote
+    }
+
+    private func reloadLocalBrowser() throws {
+        let rootURL = try storageRootURL()
+        browserItems = try loadFolderContents(at: rootURL, relativePath: nil)
+        logger.info("reloadLocalBrowser completed root=\(rootURL.path, privacy: .public) items=\(self.browserItems.count)")
+    }
+
+    private func queueCloudSync(_ label: String, operation: @escaping (NoteRepository) async throws -> Void) {
+        let previousTask = cloudSyncTail
+        cloudSyncTail = Task { [weak self] in
+            await previousTask?.value
+            guard let self else { return }
+            do {
+                try await operation(self)
+                self.storageDescription = "iCloud"
+                self.logger.info("queueCloudSync completed label=\(label, privacy: .public)")
+            } catch {
+                self.lastErrorMessage = error.localizedDescription
+                self.logger.error("queueCloudSync failed label=\(label, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 
     private func persistNotePackage(note: NoteDocument, modifiedAt: Date?) throws {
