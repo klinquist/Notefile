@@ -178,7 +178,73 @@ Folder metadata currently includes:
 - `Notefile/Models` — shared models and preferences
 - `Notefile/Services` — repository, markdown codec, and macOS mirror sync
 - `Notefile/Views` — browser, creation sheet, note editor, and settings UI
+- `scripts/set-version.sh` — updates `MARKETING_VERSION` and optionally `CURRENT_PROJECT_VERSION`
+- `scripts/build-macos-dmg.sh` — builds a macOS release app and packages it into a DMG
+- `scripts/release-github.sh` — tags the current commit and publishes the DMG to GitHub Releases
 - `image.png` — source image used for the app icon and README branding
+
+## Release Flow
+
+Set a new marketing version and optional build number:
+
+```sh
+./scripts/set-version.sh 1.1 2
+```
+
+Build a local macOS DMG:
+
+```sh
+./scripts/build-macos-dmg.sh
+```
+
+That writes the DMG to:
+
+```text
+dist/Notefile-<version>-macOS.dmg
+```
+
+Publish a GitHub release for the current commit:
+
+```sh
+./scripts/release-github.sh
+```
+
+Or publish a specific version tag:
+
+```sh
+./scripts/release-github.sh 1.1
+```
+
+Notes:
+
+- Local builds default to unsigned DMGs
+- Signed distribution builds:
+
+```sh
+SIGN_FOR_DISTRIBUTION=1 ./scripts/build-macos-dmg.sh
+```
+
+- Signed and notarized DMGs:
+
+```sh
+SIGN_FOR_DISTRIBUTION=1 \
+NOTARIZE_DMG=1 \
+NOTARYTOOL_KEYCHAIN_PROFILE=notefile-notary \
+./scripts/build-macos-dmg.sh
+```
+
+- Store notarization credentials in your keychain once with:
+
+```sh
+xcrun notarytool store-credentials notefile-notary \
+  --apple-id "<apple-id>" \
+  --team-id "<team-id>"
+```
+
+- `build-macos-dmg.sh` uses the project’s configured Developer Team by default
+- `release-github.sh` requires a clean git working tree
+- `release-github.sh` defaults to signed and notarized release builds
+- `release-github.sh` uses the `gh` CLI to create or update the GitHub release
 
 ## Current Tradeoffs
 
