@@ -1,3 +1,5 @@
+import CloudKit
+import CryptoKit
 import Foundation
 import OSLog
 
@@ -27,6 +29,10 @@ final class NoteRepository: ObservableObject {
     private static let folderMetadataFileName = ".notefile-folder.json"
     private static let noteManifestFileName = ".notefile-note.json"
     private static let entryFileExtension = "md"
+    private static let cloudKitContainerIdentifier = "iCloud.com.linquist.notefile"
+    private static let folderRecordType = "Folder"
+    private static let noteRecordType = "Note"
+    private static let entryRecordType = "NoteEntry"
     private static let entryTimestampFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -40,6 +46,7 @@ final class NoteRepository: ObservableObject {
     @Published var lastErrorMessage: String?
 
     private let fileManager = FileManager.default
+    private let cloudContainer = CKContainer(identifier: NoteRepository.cloudKitContainerIdentifier)
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     private var cachedRootURL: URL?
@@ -55,6 +62,7 @@ final class NoteRepository: ObservableObject {
 
     func loadBrowser() async {
         do {
+            try await refreshCloudCache()
             let rootURL = try storageRootURL()
             browserItems = try loadFolderContents(at: rootURL, relativePath: nil)
             lastErrorMessage = nil
@@ -71,28 +79,17 @@ final class NoteRepository: ObservableObject {
             return cachedRootURL
         }
 
-        if let ubiquityURL = fileManager.url(forUbiquityContainerIdentifier: nil) {
-            let notesRoot = ubiquityURL.appendingPathComponent("Documents", isDirectory: true)
-                .appendingPathComponent("Notes", isDirectory: true)
-            try fileManager.createDirectory(at: notesRoot, withIntermediateDirectories: true)
-            cachedRootURL = notesRoot
-            storageDescription = "iCloud Drive"
-            logger.info("storageRootURL using iCloud root=\(notesRoot.path, privacy: .public)")
-            return notesRoot
-        }
-
         let appSupport = try fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
             create: true
         )
-        let fallbackRoot = appSupport.appendingPathComponent("NotefileOffline", isDirectory: true)
-        try fileManager.createDirectory(at: fallbackRoot, withIntermediateDirectories: true)
-        cachedRootURL = fallbackRoot
-        storageDescription = "On My Device"
-        logger.warning("storageRootURL falling back to local root=\(fallbackRoot.path, privacy: .public)")
-        return fallbackRoot
+        let cacheRoot = appSupport.appendingPathComponent("NotefileCloudKitCache", isDirectory: true)
+        try fileManager.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
+        cachedRootURL = cacheRoot
+        logger.info("storageRootURL using CloudKit cache root=\(cacheRoot.path, privacy: .public)")
+        return cacheRoot
     }
 
     func createFolder(name: String, emoji: String, accentStyle: AccentStyle, parentRelativePath: String?) async throws -> String {
@@ -103,6 +100,7 @@ final class NoteRepository: ObservableObject {
         try fileManager.createDirectory(at: folderURL, withIntermediateDirectories: true)
         let metadata = FolderMetadata(emoji: emoji.ifBlank("📁"), accentStyle: accentStyle)
         try saveFolderMetadata(metadata, at: folderURL)
+        try await uploadFolder(relativePath: self.relativePath(for: folderURL), metadata: metadata, modifiedAt: Date())
         logger.info("createFolder parent=\(parentRelativePath ?? "<root>", privacy: .public) folder=\(self.relativePath(for: folderURL), privacy: .public)")
         await loadBrowser()
         return self.relativePath(for: folderURL)
@@ -125,6 +123,8 @@ final class NoteRepository: ObservableObject {
         }
 
         let updatedRelativePath = self.relativePath(for: targetURL)
+        try await deleteCloudTree(relativePath: relativePath)
+        try await uploadFolderTree(at: targetURL)
         logger.info("renameFolder from=\(relativePath, privacy: .public) to=\(updatedRelativePath, privacy: .public)")
         await loadBrowser()
         return updatedRelativePath
@@ -144,6 +144,7 @@ final class NoteRepository: ObservableObject {
             entries: []
         )
         try persistNotePackage(note: note, modifiedAt: nil)
+        try await uploadNote(note)
         logger.info("createNote parent=\(parentRelativePath ?? "<root>", privacy: .public) note=\(relativePath, privacy: .public)")
         await loadBrowser()
         return relativePath
@@ -158,16 +159,18 @@ final class NoteRepository: ObservableObject {
                 return
             }
             try fileManager.removeItem(at: itemURL)
+            try await deleteCloudTree(relativePath: item.relativePath)
         case .note:
-            try deleteNote(relativePath: item.relativePath)
+            try await deleteNote(relativePath: item.relativePath)
         }
 
         await loadBrowser()
     }
 
-    func deleteNote(relativePath: String) throws {
+    func deleteNote(relativePath: String) async throws {
         logger.notice("deleteNote relativePath=\(relativePath, privacy: .public)")
         try removeNoteStorageIfExists(relativePath: relativePath)
+        try await deleteCloudNote(relativePath: relativePath)
     }
 
     func exportCombinedMarkdown(relativePath: String) throws -> String {
@@ -177,7 +180,7 @@ final class NoteRepository: ObservableObject {
         return MarkdownNoteCodec.encode(note)
     }
 
-    func importCombinedMarkdown(_ markdown: String, relativePath: String, sourceModifiedAt: Date? = nil) throws {
+    func importCombinedMarkdown(_ markdown: String, relativePath: String, sourceModifiedAt: Date? = nil) async throws {
         let fallbackMetadata = (try? loadNote(relativePath: relativePath).metadata) ?? .default
         var note = MarkdownNoteCodec.decode(
             relativePath: relativePath,
@@ -192,7 +195,7 @@ final class NoteRepository: ObservableObject {
             note.entries = reconcileImportedEntries(note.entries, existing: existing.entries)
         }
         logger.info("importCombinedMarkdown relativePath=\(relativePath, privacy: .public) importedEntries=\(note.entries.count)")
-        _ = try save(
+        _ = try await save(
             note: note,
             originalRelativePath: relativePath,
             reloadBrowser: false,
@@ -201,7 +204,8 @@ final class NoteRepository: ObservableObject {
         )
     }
 
-    func prepareNoteForEditing(relativePath: String) throws -> NoteDocument {
+    func prepareNoteForEditing(relativePath: String) async throws -> NoteDocument {
+        try await refreshCloudNote(relativePath: relativePath)
         var note = try loadNote(relativePath: relativePath)
         if note.entries.last?.text.isEmpty != true {
             let thresholdMinutes = AppPreferences.currentNewEntryThresholdMinutes()
@@ -214,7 +218,7 @@ final class NoteRepository: ObservableObject {
             }
 
             note.entries.append(NoteEntry(timestamp: Date(), text: ""))
-            note = try save(note: note, originalRelativePath: relativePath, reloadBrowser: true)
+            note = try await save(note: note, originalRelativePath: relativePath, reloadBrowser: true)
             logger.debug("prepareNoteForEditing appendedDraft relativePath=\(relativePath, privacy: .public) entryCount=\(note.entries.count)")
         } else {
             logger.debug("prepareNoteForEditing reusedDraft relativePath=\(relativePath, privacy: .public) entryCount=\(note.entries.count)")
@@ -279,8 +283,8 @@ final class NoteRepository: ObservableObject {
         originalRelativePath: String? = nil,
         reloadBrowser: Bool = false,
         deletedEntryIDs: Set<UUID> = []
-    ) throws -> NoteDocument {
-        try save(
+    ) async throws -> NoteDocument {
+        try await save(
             note: note,
             originalRelativePath: originalRelativePath ?? note.relativePath,
             reloadBrowser: reloadBrowser,
@@ -307,7 +311,7 @@ final class NoteRepository: ObservableObject {
         mergeWithExisting: Bool,
         sourceModifiedAt: Date?,
         deletedEntryIDs: Set<UUID> = []
-    ) throws -> NoteDocument {
+    ) async throws -> NoteDocument {
         let cleanTitle = sanitizeName(note.title, fallback: "Untitled Note")
         let normalizedParentPath = parentPath(for: originalRelativePath)
         let targetRelativePath = try uniqueNoteRelativePath(
@@ -328,11 +332,13 @@ final class NoteRepository: ObservableObject {
         savedNote.entries = normalizeEntries(savedNote.entries)
         try persistNotePackage(note: savedNote, modifiedAt: sourceModifiedAt)
         try cleanupLegacyArtifacts(for: savedNote.relativePath)
+        try await uploadNote(savedNote, modifiedAt: sourceModifiedAt)
         let persistedEntryCount = persistedEntries(from: savedNote.entries).count
         logger.info("save note original=\(originalRelativePath, privacy: .public) saved=\(savedNote.relativePath, privacy: .public) entries=\(savedNote.entries.count) persistedEntries=\(persistedEntryCount)")
 
         if originalRelativePath != savedNote.relativePath {
             try removeNoteStorageIfExists(relativePath: originalRelativePath)
+            try await deleteCloudNote(relativePath: originalRelativePath)
         } else if fileManager.fileExists(atPath: try legacyNoteURL(for: savedNote.relativePath).path) {
             try cleanupLegacyArtifacts(for: savedNote.relativePath)
         }
@@ -937,9 +943,402 @@ final class NoteRepository: ObservableObject {
         entries.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
+    private var privateDatabase: CKDatabase {
+        cloudContainer.privateCloudDatabase
+    }
+
+    private func refreshCloudCache() async throws {
+        guard try await cloudAccountIsAvailable() else { return }
+
+        let folderRecords = try await fetchAllRecords(recordType: Self.folderRecordType)
+        let noteRecords = try await fetchAllRecords(recordType: Self.noteRecordType)
+        let entryRecords = try await fetchAllRecords(recordType: Self.entryRecordType)
+        let rootURL = try storageRootURL()
+
+        if fileManager.fileExists(atPath: rootURL.path) {
+            try fileManager.removeItem(at: rootURL)
+        }
+        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+
+        let folders = folderRecords
+            .compactMap(folderSnapshot(from:))
+            .sorted { directoryDepth(of: $0.relativePath) < directoryDepth(of: $1.relativePath) }
+
+        for folder in folders {
+            let folderURL = try folderURL(for: folder.relativePath)
+            try fileManager.createDirectory(at: folderURL, withIntermediateDirectories: true)
+            try saveFolderMetadata(folder.metadata, at: folderURL)
+            try setModificationDate(folder.modifiedAt, at: folderURL)
+        }
+
+        let entriesByNotePath = Dictionary(grouping: entryRecords.compactMap(entrySnapshot(from:))) { $0.notePath }
+
+        for noteRecord in noteRecords {
+            guard let note = noteSnapshot(from: noteRecord) else { continue }
+            let entries = (entriesByNotePath[note.relativePath] ?? [])
+                .map { NoteEntry(id: $0.id, timestamp: $0.timestamp, text: $0.text) }
+                .sorted { lhs, rhs in
+                    if lhs.timestamp != rhs.timestamp {
+                        return lhs.timestamp < rhs.timestamp
+                    }
+                    return lhs.id.uuidString < rhs.id.uuidString
+                }
+            let document = NoteDocument(
+                relativePath: note.relativePath,
+                title: note.title,
+                metadata: note.metadata,
+                entries: entries
+            )
+            try persistNotePackage(note: document, modifiedAt: note.modifiedAt)
+        }
+
+        storageDescription = "iCloud"
+        logger.info("refreshCloudCache folders=\(folders.count) notes=\(noteRecords.count) entries=\(entryRecords.count)")
+    }
+
+    private func refreshCloudNote(relativePath: String) async throws {
+        guard try await cloudAccountIsAvailable() else { return }
+        guard let noteRecord = try await fetchRecord(recordType: Self.noteRecordType, key: relativePath),
+              let note = noteSnapshot(from: noteRecord) else {
+            return
+        }
+
+        let entries = try await fetchCloudEntries(relativePath: relativePath)
+            .map { NoteEntry(id: $0.id, timestamp: $0.timestamp, text: $0.text) }
+            .sorted { lhs, rhs in
+                if lhs.timestamp != rhs.timestamp {
+                    return lhs.timestamp < rhs.timestamp
+                }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+        let document = NoteDocument(
+            relativePath: note.relativePath,
+            title: note.title,
+            metadata: note.metadata,
+            entries: entries
+        )
+        try persistNotePackage(note: document, modifiedAt: note.modifiedAt)
+    }
+
+    private func uploadFolderTree(at folderURL: URL) async throws {
+        guard try await cloudAccountIsAvailable() else { return }
+        guard let enumerator = fileManager.enumerator(
+            at: folderURL,
+            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        let rootRelativePath = relativePath(for: folderURL)
+        let rootMetadata = loadFolderMetadata(at: folderURL) ?? .default
+        let rootModifiedAt = (try? folderURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
+        try await uploadFolder(relativePath: rootRelativePath, metadata: rootMetadata, modifiedAt: rootModifiedAt)
+
+        while let url = enumerator.nextObject() as? URL {
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey])
+            guard values.isDirectory == true else { continue }
+
+            if url.pathExtension.lowercased() == Self.notePackageExtension {
+                let noteRelativePath = logicalNoteRelativePath(for: url, parentRelativePath: parentPath(for: relativePath(for: url)))
+                let note = try loadNote(relativePath: noteRelativePath)
+                try await uploadNote(note)
+                enumerator.skipDescendants()
+            } else {
+                let metadata = loadFolderMetadata(at: url) ?? .default
+                try await uploadFolder(
+                    relativePath: relativePath(for: url),
+                    metadata: metadata,
+                    modifiedAt: values.contentModificationDate ?? Date()
+                )
+            }
+        }
+    }
+
+    private func uploadFolder(relativePath: String, metadata: FolderMetadata, modifiedAt: Date) async throws {
+        guard try await cloudAccountIsAvailable() else { return }
+        let record = try await recordForSave(recordType: Self.folderRecordType, key: relativePath)
+        record["relativePath"] = relativePath as CKRecordValue
+        record["name"] = ((relativePath as NSString).lastPathComponent) as CKRecordValue
+        record["parentPath"] = parentPath(for: relativePath) as CKRecordValue?
+        record["emoji"] = metadata.emoji as CKRecordValue
+        record["accentStyle"] = metadata.accentStyle.rawValue as CKRecordValue
+        record["modifiedAt"] = modifiedAt as CKRecordValue
+        try await modifyRecords(saving: [record], deleting: [])
+    }
+
+    private func uploadNote(_ note: NoteDocument, modifiedAt: Date? = nil) async throws {
+        guard try await cloudAccountIsAvailable() else { return }
+        let noteModifiedAt = modifiedAt ?? Date()
+        let noteRecord = try await recordForSave(recordType: Self.noteRecordType, key: note.relativePath)
+        noteRecord["relativePath"] = note.relativePath as CKRecordValue
+        noteRecord["title"] = note.title as CKRecordValue
+        noteRecord["parentPath"] = parentPath(for: note.relativePath) as CKRecordValue?
+        noteRecord["emoji"] = note.metadata.emoji as CKRecordValue
+        noteRecord["accentStyle"] = note.metadata.accentStyle.rawValue as CKRecordValue
+        noteRecord["modifiedAt"] = noteModifiedAt as CKRecordValue
+
+        let persistedEntries = persistedEntries(from: note.entries)
+        let existingEntries = try await fetchCloudEntries(relativePath: note.relativePath)
+        let expectedEntryIDs = Set(persistedEntries.map(\.id))
+        let staleRecordIDs = existingEntries
+            .filter { !expectedEntryIDs.contains($0.id) }
+            .map { recordID(recordType: Self.entryRecordType, key: entryRecordKey(notePath: note.relativePath, entryID: $0.id)) }
+
+        var entryRecords: [CKRecord] = []
+        for entry in persistedEntries {
+            let record = try await recordForSave(
+                recordType: Self.entryRecordType,
+                key: entryRecordKey(notePath: note.relativePath, entryID: entry.id)
+            )
+            record["notePath"] = note.relativePath as CKRecordValue
+            record["entryID"] = entry.id.uuidString as CKRecordValue
+            record["timestamp"] = entry.timestamp as CKRecordValue
+            record["text"] = entry.text as CKRecordValue
+            record["modifiedAt"] = noteModifiedAt as CKRecordValue
+            entryRecords.append(record)
+        }
+
+        try await modifyRecords(saving: [noteRecord] + entryRecords, deleting: staleRecordIDs)
+        storageDescription = "iCloud"
+    }
+
+    private func deleteCloudTree(relativePath: String) async throws {
+        guard try await cloudAccountIsAvailable() else { return }
+        let folderRecords = try await fetchAllRecords(recordType: Self.folderRecordType)
+        let noteRecords = try await fetchAllRecords(recordType: Self.noteRecordType)
+        let entryRecords = try await fetchAllRecords(recordType: Self.entryRecordType)
+
+        let folderIDs = folderRecords
+            .compactMap { record -> CKRecord.ID? in
+                guard let path = record["relativePath"] as? String,
+                      path == relativePath || path.hasPrefix(relativePath + "/") else {
+                    return nil
+                }
+                return record.recordID
+            }
+        let notePaths = Set(
+            noteRecords.compactMap { record -> String? in
+                guard let path = record["relativePath"] as? String,
+                      path == relativePath || path.hasPrefix(relativePath + "/") else {
+                    return nil
+                }
+                return path
+            }
+        )
+        let noteIDs = noteRecords.filter { record in
+            guard let path = record["relativePath"] as? String else { return false }
+            return notePaths.contains(path)
+        }.map(\.recordID)
+        let entryIDs = entryRecords.filter { record in
+            guard let notePath = record["notePath"] as? String else { return false }
+            return notePaths.contains(notePath)
+        }.map(\.recordID)
+
+        try await modifyRecords(saving: [], deleting: folderIDs + noteIDs + entryIDs)
+    }
+
+    private func deleteCloudNote(relativePath: String) async throws {
+        guard try await cloudAccountIsAvailable() else { return }
+        let entries = try await fetchCloudEntries(relativePath: relativePath)
+        let entryIDs = entries.map {
+            recordID(recordType: Self.entryRecordType, key: entryRecordKey(notePath: relativePath, entryID: $0.id))
+        }
+        var recordIDsToDelete = entryIDs
+        if let noteRecord = try await fetchRecord(recordType: Self.noteRecordType, key: relativePath) {
+            recordIDsToDelete.append(noteRecord.recordID)
+        }
+        try await modifyRecords(
+            saving: [],
+            deleting: recordIDsToDelete
+        )
+    }
+
+    private func fetchCloudEntries(relativePath: String) async throws -> [CloudEntrySnapshot] {
+        try await fetchAllRecords(recordType: Self.entryRecordType)
+            .compactMap(entrySnapshot(from:))
+            .filter { $0.notePath == relativePath }
+    }
+
+    private func cloudAccountIsAvailable() async throws -> Bool {
+        let status: CKAccountStatus = try await withCheckedThrowingContinuation { continuation in
+            cloudContainer.accountStatus { status, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: status)
+                }
+            }
+        }
+
+        if status == .available {
+            storageDescription = "iCloud"
+            return true
+        }
+
+        storageDescription = "On My Device"
+        logger.warning("cloudAccountIsAvailable unavailable status=\(String(describing: status), privacy: .public)")
+        return false
+    }
+
+    private func fetchRecord(recordType: String, key: String) async throws -> CKRecord? {
+        let id = recordID(recordType: recordType, key: key)
+        return try await withCheckedThrowingContinuation { continuation in
+            privateDatabase.fetch(withRecordID: id) { record, error in
+                if let ckError = error as? CKError, ckError.code == .unknownItem {
+                    continuation.resume(returning: nil)
+                } else if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: record)
+                }
+            }
+        }
+    }
+
+    private func recordForSave(recordType: String, key: String) async throws -> CKRecord {
+        if let record = try await fetchRecord(recordType: recordType, key: key) {
+            return record
+        }
+        return CKRecord(recordType: recordType, recordID: recordID(recordType: recordType, key: key))
+    }
+
+    private func fetchAllRecords(recordType: String) async throws -> [CKRecord] {
+        try await fetchRecords(operation: CKQueryOperation(query: CKQuery(recordType: recordType, predicate: NSPredicate(value: true))))
+    }
+
+    private func fetchRecords(operation: CKQueryOperation) async throws -> [CKRecord] {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[CKRecord], Error>) in
+            var records: [CKRecord] = []
+
+            operation.recordMatchedBlock = { _, result in
+                if case let .success(record) = result {
+                    records.append(record)
+                }
+            }
+
+            operation.queryResultBlock = { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case let .success(cursor):
+                    if let cursor {
+                        Task {
+                            do {
+                                let nextRecords = try await self.fetchRecords(operation: CKQueryOperation(cursor: cursor))
+                                continuation.resume(returning: records + nextRecords)
+                            } catch {
+                                continuation.resume(throwing: error)
+                            }
+                        }
+                    } else {
+                        continuation.resume(returning: records)
+                    }
+                case let .failure(error):
+                    continuation.resume(throwing: error)
+                }
+            }
+
+            privateDatabase.add(operation)
+        }
+    }
+
+    private func modifyRecords(saving recordsToSave: [CKRecord], deleting recordIDsToDelete: [CKRecord.ID]) async throws {
+        guard !recordsToSave.isEmpty || !recordIDsToDelete.isEmpty else { return }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let operation = CKModifyRecordsOperation(recordsToSave: recordsToSave, recordIDsToDelete: recordIDsToDelete)
+            operation.savePolicy = .changedKeys
+            operation.modifyRecordsResultBlock = { result in
+                switch result {
+                case .success:
+                    continuation.resume()
+                case let .failure(error):
+                    continuation.resume(throwing: error)
+                }
+            }
+            privateDatabase.add(operation)
+        }
+    }
+
+    private func recordID(recordType: String, key: String) -> CKRecord.ID {
+        CKRecord.ID(recordName: "\(recordType)-\(sha256(key))")
+    }
+
+    private func entryRecordKey(notePath: String, entryID: UUID) -> String {
+        "\(notePath)#\(entryID.uuidString)"
+    }
+
+    private func sha256(_ value: String) -> String {
+        let digest = SHA256.hash(data: Data(value.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func folderSnapshot(from record: CKRecord) -> CloudFolderSnapshot? {
+        guard let relativePath = record["relativePath"] as? String else { return nil }
+        return CloudFolderSnapshot(
+            relativePath: relativePath,
+            metadata: FolderMetadata(
+                emoji: (record["emoji"] as? String)?.ifBlank("📁") ?? "📁",
+                accentStyle: AccentStyle(rawValue: record["accentStyle"] as? String ?? "") ?? .sky
+            ),
+            modifiedAt: (record["modifiedAt"] as? Date) ?? record.modificationDate ?? .distantPast
+        )
+    }
+
+    private func noteSnapshot(from record: CKRecord) -> CloudNoteSnapshot? {
+        guard let relativePath = record["relativePath"] as? String else { return nil }
+        let title = (record["title"] as? String) ?? fileStem(for: relativePath)
+        return CloudNoteSnapshot(
+            relativePath: relativePath,
+            title: title,
+            metadata: NoteMetadata(
+                emoji: (record["emoji"] as? String)?.ifBlank("📝") ?? "📝",
+                accentStyle: AccentStyle(rawValue: record["accentStyle"] as? String ?? "") ?? .mint
+            ),
+            modifiedAt: (record["modifiedAt"] as? Date) ?? record.modificationDate ?? .distantPast
+        )
+    }
+
+    private func entrySnapshot(from record: CKRecord) -> CloudEntrySnapshot? {
+        guard let notePath = record["notePath"] as? String,
+              let entryIDString = record["entryID"] as? String,
+              let entryID = UUID(uuidString: entryIDString) else {
+            return nil
+        }
+
+        return CloudEntrySnapshot(
+            notePath: notePath,
+            id: entryID,
+            timestamp: (record["timestamp"] as? Date) ?? record.modificationDate ?? .distantPast,
+            text: (record["text"] as? String) ?? ""
+        )
+    }
+
+    private func directoryDepth(of relativePath: String) -> Int {
+        relativePath.split(separator: "/").count
+    }
+
     private func setModificationDate(_ date: Date, at url: URL) throws {
         try fileManager.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
     }
+}
+
+private struct CloudFolderSnapshot {
+    let relativePath: String
+    let metadata: FolderMetadata
+    let modifiedAt: Date
+}
+
+private struct CloudNoteSnapshot {
+    let relativePath: String
+    let title: String
+    let metadata: NoteMetadata
+    let modifiedAt: Date
+}
+
+private struct CloudEntrySnapshot {
+    let notePath: String
+    let id: UUID
+    let timestamp: Date
+    let text: String
 }
 
 private struct NotePackageManifest: Codable {

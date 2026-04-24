@@ -86,7 +86,7 @@ final class LocalMirrorSyncService: ObservableObject {
                 case let (cloudFile?, nil):
                     if previousFiles.contains(relativePath) {
                         logger.notice("syncNow deleteFromCloud relativePath=\(relativePath, privacy: .public) reason=missingLocalPreviouslySynced")
-                        try removeCloudFile(relativePath: relativePath, kind: cloudFile.kind, cloudRoot: cloudRoot, repository: repository)
+                        try await removeCloudFile(relativePath: relativePath, kind: cloudFile.kind, cloudRoot: cloudRoot, repository: repository)
                     } else {
                         logger.info("syncNow copyCloudToLocal relativePath=\(relativePath, privacy: .public)")
                         try copyCloudFileToLocal(
@@ -103,7 +103,7 @@ final class LocalMirrorSyncService: ObservableObject {
                         try removeItemIfExists(at: localFile.url)
                     } else {
                         logger.info("syncNow copyLocalToCloud relativePath=\(relativePath, privacy: .public)")
-                        try copyLocalFileToCloud(
+                        try await copyLocalFileToCloud(
                             relativePath: relativePath,
                             file: localFile,
                             cloudRoot: cloudRoot,
@@ -122,7 +122,7 @@ final class LocalMirrorSyncService: ObservableObject {
                         )
                     } else if localFile.modifiedAt > cloudFile.modifiedAt.addingTimeInterval(1) {
                         logger.info("syncNow updateCloudFromLocal relativePath=\(relativePath, privacy: .public)")
-                        try copyLocalFileToCloud(
+                        try await copyLocalFileToCloud(
                             relativePath: relativePath,
                             file: localFile,
                             cloudRoot: cloudRoot,
@@ -409,11 +409,11 @@ final class LocalMirrorSyncService: ObservableObject {
         file: MirrorFileRecord,
         cloudRoot: URL,
         repository: NoteRepository
-    ) throws {
+    ) async throws {
         switch file.kind {
         case .note:
             let markdown = try String(contentsOf: file.url, encoding: .utf8)
-            try repository.importCombinedMarkdown(
+            try await repository.importCombinedMarkdown(
                 markdown,
                 relativePath: relativePath,
                 sourceModifiedAt: file.modifiedAt
@@ -432,11 +432,11 @@ final class LocalMirrorSyncService: ObservableObject {
         kind: MirrorFileKind,
         cloudRoot: URL,
         repository: NoteRepository
-    ) throws {
+    ) async throws {
         switch kind {
         case .note:
             logger.notice("removeCloudFile note relativePath=\(relativePath, privacy: .public)")
-            try repository.deleteNote(relativePath: relativePath)
+            try await repository.deleteNote(relativePath: relativePath)
 
         case .folderMetadata:
             logger.notice("removeCloudFile metadata relativePath=\(relativePath, privacy: .public)")

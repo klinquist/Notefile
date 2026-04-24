@@ -7,7 +7,7 @@
     </td>
     <td valign="top">
       <p>Notefile is a SwiftUI note-taking app for iPhone, iPad, and Mac built for fast capture while you are on the go.</p>
-      <p>It stores notes in iCloud Drive when available, keeps each note append-first, and on macOS can mirror the same note tree into a normal folder on your filesystem.</p>
+      <p>It syncs notes through CloudKit when iCloud is available, keeps each note append-first, and on macOS can mirror the same note tree into a normal folder on your filesystem.</p>
     </td>
   </tr>
 </table>
@@ -15,8 +15,8 @@
 ## Highlights
 
 - Large, touch-friendly browser on iPhone with square note and folder tiles
-- iCloud-backed storage with on-device fallback when iCloud is unavailable
-- Notes stored as entry-per-file note packages for better sync behavior
+- CloudKit-backed storage with on-device fallback when iCloud is unavailable
+- Notes cached locally as entry-per-file note packages and synced through CloudKit records
 - macOS mirror that combines note packages back into single `.md` files on disk
 - Entry-level search across folders, note titles, and note content
 - Autosave while typing, on background, and on navigation away
@@ -43,7 +43,7 @@
   - `Search notes` at the root searches everything
   - `Search <folder name>` inside a folder scopes results to that folder tree
 - Includes Settings for mirror configuration and note preferences
-- Supports syncing iCloud-backed notes to a user-selected local folder
+- Supports mirroring CloudKit-backed notes to a user-selected local folder
 
 ## Note Editing
 
@@ -102,13 +102,13 @@ macOS-only settings:
 
 ## Storage Model
 
-Preferred storage root:
+Cloud storage:
 
-- iCloud ubiquity container at `Documents/Notes`
+- CloudKit private database in the `iCloud.com.linquist.notefile` container
 
-Fallback storage root:
+Local cache/fallback storage root:
 
-- app support folder named `NotefileOffline`
+- app support folder named `NotefileCloudKitCache`
 
 Folder storage:
 
@@ -121,10 +121,10 @@ Note storage:
 - note metadata stored in `.notefile-note.json`
 - each entry is stored as its own markdown file inside the package
 
-Example cloud structure:
+Example local cache structure:
 
 ```text
-Notes/
+<cache root>/
   People/
     Kris.note/
       .notefile-note.json
@@ -142,9 +142,9 @@ The macOS mirror reconstructs the same note as a single markdown file:
 
 ## Sync Behavior
 
-### iCloud app storage
+### CloudKit app storage
 
-- When iCloud is available, Notefile reads and writes directly inside the iCloud-backed note tree
+- When iCloud is available, Notefile syncs notes through CloudKit and keeps a local cache for fast editing
 - When iCloud is unavailable, Notefile falls back to local storage and surfaces a warning in the note editor
 - Browser refreshes reload content from storage
 - Open notes refresh from disk when appropriate without overwriting unsaved local edits

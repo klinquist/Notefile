@@ -72,7 +72,9 @@ struct NoteEditorView: View {
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .active:
-                refreshFromDiskIfNeeded(force: true)
+                Task {
+                    await refreshFromDiskIfNeeded(force: true)
+                }
             case .background:
                 queueSave(immediate: true)
             default:
@@ -179,7 +181,7 @@ struct NoteEditorView: View {
 
     private func loadNote() async {
         do {
-            let note = try repository.prepareNoteForEditing(relativePath: notePath)
+            let note = try await repository.prepareNoteForEditing(relativePath: notePath)
             draft = note
             lastSavedDraft = note
             lastDiskModifiedAt = try repository.noteModificationDate(relativePath: note.relativePath)
@@ -248,13 +250,13 @@ struct NoteEditorView: View {
             }
             guard !Task.isCancelled else { return }
 
-            await MainActor.run {
-                do {
-                    let saved = try repository.save(
-                        note: snapshot,
-                        originalRelativePath: notePath,
-                        deletedEntryIDs: deletedEntryIDs
-                    )
+            do {
+                let saved = try await repository.save(
+                    note: snapshot,
+                    originalRelativePath: notePath,
+                    deletedEntryIDs: deletedEntryIDs
+                )
+                await MainActor.run {
                     if saved != snapshot {
                         draft = saved
                     }
@@ -264,7 +266,9 @@ struct NoteEditorView: View {
                     if saved.relativePath != notePath {
                         onPathChange(saved.relativePath)
                     }
-                } catch {
+                }
+            } catch {
+                await MainActor.run {
                     loadError = error.localizedDescription
                 }
             }
@@ -278,16 +282,18 @@ struct NoteEditorView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    guard scenePhase == .active else { return }
-                    refreshFromDiskIfNeeded()
+                let isActive = await MainActor.run {
+                    scenePhase == .active
+                }
+                if isActive {
+                    await refreshFromDiskIfNeeded()
                 }
             }
         }
 #endif
     }
 
-    private func refreshFromDiskIfNeeded(force: Bool = false) {
+    private func refreshFromDiskIfNeeded(force: Bool = false) async {
 #if os(iOS)
         if !force {
             return
@@ -306,7 +312,7 @@ struct NoteEditorView: View {
         }
 
         do {
-            let refreshed = try repository.prepareNoteForEditing(relativePath: notePath)
+            let refreshed = try await repository.prepareNoteForEditing(relativePath: notePath)
             self.draft = refreshed
             lastSavedDraft = refreshed
             lastDiskModifiedAt = try repository.noteModificationDate(relativePath: refreshed.relativePath)
@@ -404,7 +410,7 @@ struct NoteEditorView: View {
     }
 
     private var shouldShowStorageWarning: Bool {
-        repository.storageDescription != "iCloud Drive"
+        repository.storageDescription != "iCloud"
     }
 
     private var displayTitle: String {
