@@ -1,7 +1,28 @@
 #if os(macOS)
 import AppKit
+import CoreServices
 import Foundation
 import OSLog
+
+private final class FileEventStreamBox: @unchecked Sendable {
+    private var stream: FSEventStreamRef?
+
+    init(_ stream: FSEventStreamRef) {
+        self.stream = stream
+    }
+
+    deinit {
+        stop()
+    }
+
+    func stop() {
+        guard let stream else { return }
+        FSEventStreamStop(stream)
+        FSEventStreamInvalidate(stream)
+        FSEventStreamRelease(stream)
+        self.stream = nil
+    }
+}
 
 @MainActor
 final class LocalMirrorSyncService: ObservableObject {
@@ -15,17 +36,25 @@ final class LocalMirrorSyncService: ObservableObject {
     private let bookmarkKey = "LocalMirrorFolderBookmark"
     private let syncManifestKey = "LocalMirrorSyncManifest"
     private weak var repository: NoteRepository?
-    private var syncTask: Task<Void, Never>?
+    private var scheduledSyncTask: Task<Void, Never>?
+    private var fileEventStream: FileEventStreamBox?
+    private var isSyncing = false
+    private var needsFollowUpSync = false
+    private let fileEventQueue = DispatchQueue(label: "com.linquist.notefile.localMirrorEvents")
     private let logger = Logger(subsystem: "com.linquist.notefile", category: "LocalMirrorSync")
 
     init(repository: NoteRepository) {
         self.repository = repository
+        repository.localMirrorSyncHandler = { [weak self] reason in
+            self?.scheduleSync(reason: reason)
+        }
         restoreBookmark()
-        startPeriodicSync()
+        startWatchingMirrorFolder()
+        scheduleSync(reason: "startup", debounce: .milliseconds(500))
     }
 
     deinit {
-        syncTask?.cancel()
+        scheduledSyncTask?.cancel()
     }
 
     func chooseFolder() {
@@ -40,19 +69,31 @@ final class LocalMirrorSyncService: ObservableObject {
             saveBookmark(for: url)
             mirroredFolderURL = url
             statusText = "Mirroring with \(url.path)"
-            Task {
-                await syncNow()
-            }
+            startWatchingMirrorFolder()
+            scheduleSync(reason: "chooseFolder", debounce: .milliseconds(100))
         }
     }
 
     func syncNow() async {
+        if isSyncing {
+            needsFollowUpSync = true
+            return
+        }
+
         guard let mirroredFolderURL else {
             statusText = "Select a local folder to mirror your iCloud notes."
             return
         }
 
         guard let repository else { return }
+        isSyncing = true
+        defer {
+            isSyncing = false
+            if needsFollowUpSync {
+                needsFollowUpSync = false
+                scheduleSync(reason: "followUp", debounce: .seconds(1))
+            }
+        }
 
         let didAccess = mirroredFolderURL.startAccessingSecurityScopedResource()
         defer {
@@ -199,13 +240,99 @@ final class LocalMirrorSyncService: ObservableObject {
         }
     }
 
-    private func startPeriodicSync() {
-        syncTask = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(5))
-                await syncNow()
+    private func scheduleSync(reason: String, debounce: Duration = .seconds(1)) {
+        guard mirroredFolderURL != nil else { return }
+
+        if isSyncing {
+            needsFollowUpSync = true
+            logger.debug("scheduleSync deferred while syncing reason=\(reason, privacy: .public)")
+            return
+        }
+
+        scheduledSyncTask?.cancel()
+        scheduledSyncTask = Task { [weak self] in
+            try? await Task.sleep(for: debounce)
+            guard !Task.isCancelled else { return }
+            await self?.syncNow()
+        }
+        logger.debug("scheduleSync reason=\(reason, privacy: .public)")
+    }
+
+    private func startWatchingMirrorFolder() {
+        stopWatchingMirrorFolder()
+
+        guard let mirroredFolderURL else { return }
+
+        let didAccess = mirroredFolderURL.startAccessingSecurityScopedResource()
+        if didAccess {
+            mirroredFolderURL.stopAccessingSecurityScopedResource()
+        }
+
+        var context = FSEventStreamContext(
+            version: 0,
+            info: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()),
+            retain: nil,
+            release: nil,
+            copyDescription: nil
+        )
+
+        let callback: FSEventStreamCallback = { _, callbackInfo, eventCount, eventPaths, eventFlags, _ in
+            guard let callbackInfo else { return }
+            let service = Unmanaged<LocalMirrorSyncService>.fromOpaque(callbackInfo).takeUnretainedValue()
+            let paths = unsafeBitCast(eventPaths, to: NSArray.self) as? [String] ?? []
+            let flags = Array(UnsafeBufferPointer(start: eventFlags, count: eventCount))
+
+            Task { @MainActor in
+                service.handleMirrorFileEvents(paths: paths, flags: flags)
             }
         }
+
+        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes)
+        guard let stream = FSEventStreamCreate(
+            kCFAllocatorDefault,
+            callback,
+            &context,
+            [mirroredFolderURL.path] as CFArray,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+            0.75,
+            flags
+        ) else {
+            logger.error("startWatchingMirrorFolder failed path=\(mirroredFolderURL.path, privacy: .public)")
+            return
+        }
+
+        FSEventStreamSetDispatchQueue(stream, fileEventQueue)
+        if FSEventStreamStart(stream) {
+            fileEventStream = FileEventStreamBox(stream)
+            logger.info("startWatchingMirrorFolder path=\(mirroredFolderURL.path, privacy: .public)")
+        } else {
+            FileEventStreamBox(stream).stop()
+            logger.error("startWatchingMirrorFolder could not start path=\(mirroredFolderURL.path, privacy: .public)")
+        }
+    }
+
+    private func stopWatchingMirrorFolder() {
+        guard let fileEventStream else { return }
+        fileEventStream.stop()
+        self.fileEventStream = nil
+    }
+
+    private func handleMirrorFileEvents(paths: [String], flags: [FSEventStreamEventFlags]) {
+        guard mirroredFolderURL != nil else { return }
+
+        if isSyncing {
+            needsFollowUpSync = true
+            return
+        }
+
+        let ignoredFlags = FSEventStreamEventFlags(kFSEventStreamEventFlagEventIdsWrapped)
+        let hasMeaningfulEvent = flags.contains { flags in
+            flags & ignoredFlags == 0
+        }
+
+        guard hasMeaningfulEvent else { return }
+        logger.debug("handleMirrorFileEvents count=\(paths.count)")
+        scheduleSync(reason: "mirrorFileEvent", debounce: .seconds(1))
     }
 
     private func restoreBookmark() {

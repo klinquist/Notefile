@@ -46,6 +46,8 @@ final class NoteRepository: ObservableObject {
     @Published private(set) var storageDescription = "Checking iCloud"
     @Published var lastErrorMessage: String?
 
+    var localMirrorSyncHandler: ((String) -> Void)?
+
     private let fileManager = FileManager.default
     private let cloudContainer = CKContainer(identifier: NoteRepository.cloudKitContainerIdentifier)
     private let decoder = JSONDecoder()
@@ -116,6 +118,7 @@ final class NoteRepository: ObservableObject {
         }
         logger.info("createFolder parent=\(parentRelativePath ?? "<root>", privacy: .public) folder=\(relativePath, privacy: .public)")
         try reloadLocalBrowser()
+        notifyLocalMirrorSyncNeeded("createFolder")
         return relativePath
     }
 
@@ -142,6 +145,7 @@ final class NoteRepository: ObservableObject {
         }
         logger.info("renameFolder from=\(relativePath, privacy: .public) to=\(updatedRelativePath, privacy: .public)")
         try reloadLocalBrowser()
+        notifyLocalMirrorSyncNeeded("renameFolder")
         return updatedRelativePath
     }
 
@@ -164,6 +168,7 @@ final class NoteRepository: ObservableObject {
         }
         logger.info("createNote parent=\(parentRelativePath ?? "<root>", privacy: .public) note=\(relativePath, privacy: .public)")
         try reloadLocalBrowser()
+        notifyLocalMirrorSyncNeeded("createNote")
         return relativePath
     }
 
@@ -185,6 +190,7 @@ final class NoteRepository: ObservableObject {
         }
 
         try reloadLocalBrowser()
+        notifyLocalMirrorSyncNeeded("delete")
     }
 
     func deleteNote(relativePath: String) async throws {
@@ -193,6 +199,7 @@ final class NoteRepository: ObservableObject {
         queueCloudSync("deleteNote") { repository in
             try await repository.deleteCloudNote(relativePath: relativePath)
         }
+        notifyLocalMirrorSyncNeeded("deleteNote")
     }
 
     func setFavorite(_ isFavorite: Bool, for item: BrowserItem) throws {
@@ -216,6 +223,7 @@ final class NoteRepository: ObservableObject {
         }
 
         try reloadLocalBrowser()
+        notifyLocalMirrorSyncNeeded("setFavorite")
     }
 
     func exportCombinedMarkdown(relativePath: String) throws -> String {
@@ -397,7 +405,12 @@ final class NoteRepository: ObservableObject {
             try reloadLocalBrowser()
         }
 
+        notifyLocalMirrorSyncNeeded("saveNote")
         return savedNote
+    }
+
+    private func notifyLocalMirrorSyncNeeded(_ reason: String) {
+        localMirrorSyncHandler?(reason)
     }
 
     private func reloadLocalBrowser() throws {
