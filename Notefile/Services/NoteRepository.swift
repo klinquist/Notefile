@@ -30,6 +30,7 @@ final class NoteRepository: ObservableObject {
     private static let noteManifestFileName = ".notefile-note.json"
     private static let entryFileExtension = "md"
     private static let cloudKitContainerIdentifier = "iCloud.com.linquist.notefile"
+    private static let cloudRecordZoneID = CKRecordZone.ID(zoneName: "Notefile")
     private static let folderRecordType = "Folder"
     private static let noteRecordType = "Note"
     private static let entryRecordType = "NoteEntry"
@@ -50,6 +51,7 @@ final class NoteRepository: ObservableObject {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     private var cachedRootURL: URL?
+    private var cloudRecordZoneIsReady = false
     private let logger = Logger(subsystem: "com.linquist.notefile", category: "NoteRepository")
 
     init() {
@@ -1183,6 +1185,7 @@ final class NoteRepository: ObservableObject {
     }
 
     private func fetchRecord(recordType: String, key: String) async throws -> CKRecord? {
+        try await ensureCloudRecordZoneExists()
         let id = recordID(recordType: recordType, key: key)
         return try await withCheckedThrowingContinuation { continuation in
             privateDatabase.fetch(withRecordID: id) { record, error in
@@ -1205,13 +1208,14 @@ final class NoteRepository: ObservableObject {
     }
 
     private func fetchAllCloudRecords() async throws -> [CKRecord] {
+        try await ensureCloudRecordZoneExists()
         var records: [CKRecord] = []
         var changeToken: CKServerChangeToken?
         var moreComing = true
 
         while moreComing {
             let changes = try await privateDatabase.recordZoneChanges(
-                inZoneWith: .default,
+                inZoneWith: Self.cloudRecordZoneID,
                 since: changeToken
             )
             for result in changes.modificationResultsByID.values {
@@ -1226,6 +1230,7 @@ final class NoteRepository: ObservableObject {
 
     private func modifyRecords(saving recordsToSave: [CKRecord], deleting recordIDsToDelete: [CKRecord.ID]) async throws {
         guard !recordsToSave.isEmpty || !recordIDsToDelete.isEmpty else { return }
+        try await ensureCloudRecordZoneExists()
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let operation = CKModifyRecordsOperation(recordsToSave: recordsToSave, recordIDsToDelete: recordIDsToDelete)
@@ -1243,7 +1248,38 @@ final class NoteRepository: ObservableObject {
     }
 
     private func recordID(recordType: String, key: String) -> CKRecord.ID {
-        CKRecord.ID(recordName: "\(recordType)-\(sha256(key))")
+        CKRecord.ID(recordName: "\(recordType)-\(sha256(key))", zoneID: Self.cloudRecordZoneID)
+    }
+
+    private func ensureCloudRecordZoneExists() async throws {
+        guard !cloudRecordZoneIsReady else { return }
+
+        let zoneID = Self.cloudRecordZoneID
+        let zones = try await privateDatabase.recordZones(for: [zoneID])
+        if case .success = zones[zoneID] {
+            cloudRecordZoneIsReady = true
+            return
+        }
+
+        if case let .failure(error) = zones[zoneID],
+           !isMissingCloudKitItemError(error) {
+            throw error
+        }
+
+        let result = try await privateDatabase.modifyRecordZones(
+            saving: [CKRecordZone(zoneID: zoneID)],
+            deleting: []
+        )
+        if let saveResult = result.saveResults[zoneID] {
+            _ = try saveResult.get()
+        }
+        cloudRecordZoneIsReady = true
+        logger.info("ensureCloudRecordZoneExists created zone=\(zoneID.zoneName, privacy: .public)")
+    }
+
+    private func isMissingCloudKitItemError(_ error: Error) -> Bool {
+        guard let ckError = error as? CKError else { return false }
+        return ckError.code == .unknownItem || ckError.code == .zoneNotFound
     }
 
     private func entryRecordKey(notePath: String, entryID: UUID) -> String {
