@@ -470,13 +470,21 @@ struct RootView: View {
         }
 #if os(macOS)
         .task(id: scenePhase) {
-            await runActiveCloudRefreshLoop()
+            await runMacCloudRefreshLoop()
         }
 #endif
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
             scheduleBrowserRefresh()
         }
+#if os(macOS)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            scheduleBrowserRefresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didDeminiaturizeNotification)) { _ in
+            scheduleBrowserRefresh()
+        }
+#endif
         .sheet(isPresented: $showingCreateFolder) {
             CreateItemSheet(
                 mode: .folder,
@@ -780,14 +788,34 @@ struct RootView: View {
     }
 
 #if os(macOS)
-    private func runActiveCloudRefreshLoop() async {
-        guard scenePhase == .active else { return }
+    private func runMacCloudRefreshLoop() async {
+        var wasForeground = macCloudRefreshIsForeground()
+        var lastBackgroundRefresh = Date()
 
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(15))
-            guard !Task.isCancelled, scenePhase == .active else { return }
-            await repository.loadBrowser()
+            guard !Task.isCancelled else { return }
+
+            if macCloudRefreshIsForeground() {
+                wasForeground = true
+                await repository.loadBrowser()
+            } else {
+                if wasForeground {
+                    lastBackgroundRefresh = Date()
+                    wasForeground = false
+                }
+
+                guard Date().timeIntervalSince(lastBackgroundRefresh) >= 15 * 60 else { continue }
+                lastBackgroundRefresh = Date()
+                await repository.loadBrowser()
+            }
         }
+    }
+
+    private func macCloudRefreshIsForeground() -> Bool {
+        scenePhase == .active
+            && NSApplication.shared.isActive
+            && NSApplication.shared.windows.contains { $0.isVisible && !$0.isMiniaturized }
     }
 #endif
 }
