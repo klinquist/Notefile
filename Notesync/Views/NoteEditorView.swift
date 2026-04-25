@@ -133,6 +133,7 @@ struct NoteEditorView: View {
     @State private var focusedEntryID: NoteEntry.ID?
     @State private var entryPendingDeletion: NoteEntry.ID?
     @State private var showingCopiedFeedback = false
+    @State private var copiedEntryID: NoteEntry.ID?
     @State private var hasAppliedInitialFocus = false
     @State private var isEditingTitle = false
 #if os(iOS)
@@ -251,19 +252,34 @@ struct NoteEditorView: View {
     private func copyNoteToClipboard() {
         guard let draft else { return }
         let text = clipboardText(for: draft)
-
-#if os(iOS)
-        UIPasteboard.general.string = text
-#elseif os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-#endif
+        copyToClipboard(text)
 
         showingCopiedFeedback = true
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(1.2))
             showingCopiedFeedback = false
         }
+    }
+
+    private func copyEntryToClipboard(_ entry: NoteEntry) {
+        copyToClipboard(entry.text.trimmingCharacters(in: .newlines))
+
+        copiedEntryID = entry.id
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.2))
+            if copiedEntryID == entry.id {
+                copiedEntryID = nil
+            }
+        }
+    }
+
+    private func copyToClipboard(_ text: String) {
+#if os(iOS)
+        UIPasteboard.general.string = text
+#elseif os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+#endif
     }
 
     private func clipboardText(for note: NoteDocument) -> String {
@@ -281,6 +297,14 @@ struct NoteEditorView: View {
         }
 
         return sections.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func markdownText(for note: NoteDocument) -> String {
+        var exportNote = note
+        exportNote.entries = note.entries.filter { entry in
+            !entry.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return MarkdownNoteCodec.encode(exportNote)
     }
 
     private func loadNote() async {
@@ -488,6 +512,7 @@ struct NoteEditorView: View {
 
             HStack(spacing: 10) {
                 copyButton
+                shareButton
 
                 Button {
                     isEditingTitle = true
@@ -562,6 +587,30 @@ struct NoteEditorView: View {
         .accessibilityLabel(showingCopiedFeedback ? "Copied" : "Copy Note")
     }
 
+    private var shareButton: some View {
+        ShareLink(
+            item: draft.map(markdownText(for:)) ?? "",
+            subject: Text(displayTitle),
+            message: Text(displayTitle)
+        ) {
+            Image(systemName: "square.and.arrow.up")
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 34, height: 34)
+        }
+#if os(iOS)
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+        .background(.thinMaterial, in: Circle())
+        .overlay(
+            Circle()
+                .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.8)
+        )
+#else
+        .buttonStyle(.borderless)
+#endif
+        .accessibilityLabel("Share Note")
+    }
+
     private func entryCard(for entry: NoteEntry, index: Int) -> some View {
         let isNewestEntry = index == (draft?.entries.count ?? 0) - 1
         let isHighlightedEntry = highlightedEntryID == entry.id
@@ -582,6 +631,26 @@ struct NoteEditorView: View {
 #endif
 
                 Spacer()
+
+                Button {
+                    copyEntryToClipboard(entry)
+                } label: {
+                    Image(systemName: copiedEntryID == entry.id ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                }
+#if os(iOS)
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary.opacity(0.86))
+                .background(.thinMaterial, in: Circle())
+                .overlay(
+                    Circle()
+                        .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.8)
+                )
+#else
+                .buttonStyle(.borderless)
+#endif
+                .accessibilityLabel(copiedEntryID == entry.id ? "Copied Entry" : "Copy Entry")
 
                 Button(role: .destructive) {
                     entryPendingDeletion = entry.id
