@@ -140,8 +140,6 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        window.deminiaturize(nil)
-        window.orderOut(nil)
         enterMenuBarMode()
     }
 
