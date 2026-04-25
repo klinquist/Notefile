@@ -36,10 +36,9 @@ final class NotesyncAppDelegate: NSObject, UIApplicationDelegate {
     }
 }
 #elseif os(macOS)
+@MainActor
 final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    private var userDefaultsObserver: NSObjectProtocol?
-    private var windowMiniaturizeObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.registerForRemoteNotifications()
@@ -59,21 +58,23 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
     private func setupMacMinimizeBehavior() {
         applyMacMinimizeBehavior()
 
-        userDefaultsObserver = NotificationCenter.default.addObserver(
-            forName: UserDefaults.didChangeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.applyMacMinimizeBehavior()
-        }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(userDefaultsDidChange(_:)),
+            name: UserDefaults.didChangeNotification,
+            object: nil
+        )
 
-        windowMiniaturizeObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didMiniaturizeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            self?.handleWindowDidMiniaturize(notification)
-        }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidMiniaturize(_:)),
+            name: NSWindow.didMiniaturizeNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     private func applyMacMinimizeBehavior() {
@@ -99,7 +100,9 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "Notesync")
         item.button?.imagePosition = .imageOnly
-        item.menu = statusMenu()
+        item.button?.target = self
+        item.button?.action = #selector(statusItemClicked(_:))
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
     }
 
@@ -121,9 +124,6 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
 
     private func statusMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Show Notesync", action: #selector(showNotesyncFromMenu), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(showSettingsFromMenu), keyEquivalent: ","))
-        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Notesync", action: #selector(quitNotesyncFromMenu), keyEquivalent: "q"))
 
         for item in menu.items {
@@ -143,14 +143,20 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
         enterMenuBarMode()
     }
 
-    @objc private func showNotesyncFromMenu() {
-        showMainWindow()
+    @objc private func userDefaultsDidChange(_ notification: Notification) {
+        applyMacMinimizeBehavior()
     }
 
-    @objc private func showSettingsFromMenu() {
-        leaveMenuBarMode()
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        NSApplication.shared.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+    @objc private func windowDidMiniaturize(_ notification: Notification) {
+        handleWindowDidMiniaturize(notification)
+    }
+
+    @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+        if NSApplication.shared.currentEvent?.type == .rightMouseUp {
+            statusMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height), in: sender)
+        } else {
+            showMainWindow()
+        }
     }
 
     @objc private func quitNotesyncFromMenu() {
@@ -159,8 +165,14 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
 
     private func showMainWindow() {
         leaveMenuBarMode()
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(50))
+            self?.restoreMainWindow()
+        }
+    }
 
+    private func restoreMainWindow() {
+        NSApplication.shared.activate(ignoringOtherApps: true)
         let visibleMainWindows = NSApplication.shared.windows.filter { window in
             !window.isMiniaturized && !window.isSheet && !window.title.localizedCaseInsensitiveContains("Settings")
         }
@@ -178,7 +190,7 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        NSApplication.shared.sendAction(Selector(("newWindowForTab:")), to: nil, from: nil)
+        NSApplication.shared.sendAction(#selector(NSResponder.newWindowForTab(_:)), to: nil, from: nil)
     }
 
     private static func postCloudKitChangeNotification(from userInfo: [AnyHashable: Any]) {
