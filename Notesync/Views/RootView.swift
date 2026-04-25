@@ -102,18 +102,40 @@ enum BrowserCardSizeOption: Double, CaseIterable, Identifiable {
     }
 }
 
+#if os(macOS)
+enum MacMinimizeBehavior: String, CaseIterable, Identifiable {
+    case dock
+    case menuBar
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .dock: "Dock"
+        case .menuBar: "Menu Bar"
+        }
+    }
+}
+#endif
+
 enum AppPreferences {
     static let newEntryThresholdMinutesKey = "Settings.NewEntryThresholdMinutes"
     static let noteFontSizeKey = "Settings.NoteFontSize"
     static let noteFontKey = "Settings.NoteFont"
     static let browserCardSizeKey = "Settings.BrowserCardSize"
     static let browserDisplayModeKey = "Settings.BrowserDisplayMode"
+#if os(macOS)
+    static let macMinimizeBehaviorKey = "Settings.MacMinimizeBehavior"
+#endif
 
     static let defaultNewEntryThresholdMinutes = 0
     static let defaultNoteFontSize = 17.0
     static let defaultNoteFont = NoteFontOption.system
     static let defaultBrowserCardSize = BrowserCardSizeOption.large.rawValue
     static let defaultBrowserDisplayMode = BrowserDisplayMode.cards
+#if os(macOS)
+    static let defaultMacMinimizeBehavior = MacMinimizeBehavior.dock
+#endif
     static let minimumNoteFontSize = 12.0
     static let maximumNoteFontSize = 30.0
 
@@ -138,6 +160,12 @@ enum AppPreferences {
     static func normalizedBrowserDisplayMode(_ value: String) -> BrowserDisplayMode {
         BrowserDisplayMode(rawValue: value) ?? defaultBrowserDisplayMode
     }
+
+#if os(macOS)
+    static func normalizedMacMinimizeBehavior(_ value: String) -> MacMinimizeBehavior {
+        MacMinimizeBehavior(rawValue: value) ?? defaultMacMinimizeBehavior
+    }
+#endif
 
     static func currentNewEntryThresholdMinutes() -> Int {
         normalizedNewEntryThresholdMinutes(
@@ -164,6 +192,9 @@ struct NotesyncSettingsView: View {
     private var browserDisplayModeRawValue = AppPreferences.defaultBrowserDisplayMode.rawValue
 
 #if os(macOS)
+    @AppStorage(AppPreferences.macMinimizeBehaviorKey)
+    private var macMinimizeBehaviorRawValue = AppPreferences.defaultMacMinimizeBehavior.rawValue
+
     @EnvironmentObject private var localMirrorSyncService: LocalMirrorSyncService
 #endif
 
@@ -173,13 +204,14 @@ struct NotesyncSettingsView: View {
             browserSection
 
 #if os(macOS)
+            macSection
             mirrorSection
 #endif
         }
 #if os(macOS)
         .formStyle(.grouped)
         .padding()
-        .frame(minWidth: 540, minHeight: 320)
+        .frame(minWidth: 540, minHeight: 420)
 #endif
     }
 
@@ -276,6 +308,23 @@ struct NotesyncSettingsView: View {
     }
 
 #if os(macOS)
+    private var macSection: some View {
+        Section("Mac") {
+            Picker("Minimize To", selection: macMinimizeBehaviorBinding) {
+                ForEach(MacMinimizeBehavior.allCases) { behavior in
+                    Text(behavior.label)
+                        .tag(behavior.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text(macMinimizeBehavior == .menuBar ? "Notesync stays in the menu bar and hides its Dock icon." : "Notesync uses the standard Dock icon and Dock minimization.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 4)
+        }
+    }
+
     private var mirrorSection: some View {
         Section("Mirror") {
             LabeledContent("Mirror Folder") {
@@ -336,6 +385,19 @@ struct NotesyncSettingsView: View {
             set: { noteFontRawValue = AppPreferences.normalizedNoteFont($0).rawValue }
         )
     }
+
+#if os(macOS)
+    private var macMinimizeBehaviorBinding: Binding<String> {
+        Binding(
+            get: { macMinimizeBehavior.rawValue },
+            set: { macMinimizeBehaviorRawValue = AppPreferences.normalizedMacMinimizeBehavior($0).rawValue }
+        )
+    }
+
+    private var macMinimizeBehavior: MacMinimizeBehavior {
+        AppPreferences.normalizedMacMinimizeBehavior(macMinimizeBehaviorRawValue)
+    }
+#endif
 
     private var noteFont: NoteFontOption {
         AppPreferences.normalizedNoteFont(noteFontRawValue)
