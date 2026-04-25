@@ -80,12 +80,10 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
         let behavior = currentMacMinimizeBehavior()
         switch behavior {
         case .dock:
-            removeStatusItem()
-            NSApplication.shared.setActivationPolicy(.regular)
+            leaveMenuBarMode()
 
         case .menuBar:
-            configureStatusItem()
-            NSApplication.shared.setActivationPolicy(.accessory)
+            leaveMenuBarMode()
         }
     }
 
@@ -111,6 +109,16 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
         self.statusItem = nil
     }
 
+    private func enterMenuBarMode() {
+        configureStatusItem()
+        NSApplication.shared.setActivationPolicy(.accessory)
+    }
+
+    private func leaveMenuBarMode() {
+        removeStatusItem()
+        NSApplication.shared.setActivationPolicy(.regular)
+    }
+
     private func statusMenu() -> NSMenu {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Show Notesync", action: #selector(showNotesyncFromMenu), keyEquivalent: ""))
@@ -134,6 +142,7 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
 
         window.deminiaturize(nil)
         window.orderOut(nil)
+        enterMenuBarMode()
     }
 
     @objc private func showNotesyncFromMenu() {
@@ -141,6 +150,7 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showSettingsFromMenu() {
+        leaveMenuBarMode()
         NSApplication.shared.activate(ignoringOtherApps: true)
         NSApplication.shared.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
@@ -150,6 +160,7 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showMainWindow() {
+        leaveMenuBarMode()
         NSApplication.shared.activate(ignoringOtherApps: true)
 
         let visibleMainWindows = NSApplication.shared.windows.filter { window in
