@@ -1,12 +1,12 @@
-# Notesync
+# Notefile.md
 
 <table>
   <tr>
     <td width="220" valign="top">
-      <img src="image.png" alt="Notesync icon" width="180" />
+      <img src="image.png" alt="Notefile.md icon" width="180" />
     </td>
     <td valign="top">
-      <p>Notesync is a simple notes app built for organizing quick project thoughts into folders, notes, and timeline-style entries, then keeping them synchronized across Mac, iPhone, and iPad with iCloud.</p>
+      <p>Notefile.md is a simple notes app built for organizing quick project thoughts into folders, notes, and timeline-style entries, then keeping them synchronized across Mac, iPhone, and iPad with iCloud.</p>
       <p>Notes are also mirrored to the local filesystem as Markdown files, making them easy to read, back up, edit, or use with project management agents and other developer workflows.</p>
     </td>
   </tr>
@@ -24,7 +24,7 @@
 
 ## Markdown Mirror
 
-On macOS, Notesync can mirror the CloudKit-backed note tree into a normal folder on disk. Folders become folders, and each note is exported as a single `.md` file:
+On macOS, Notefile.md can mirror the CloudKit-backed note tree into a normal folder on disk. Folders become folders, and each note is exported as a single `.md` file:
 
 ```text
 <mirror root>/
