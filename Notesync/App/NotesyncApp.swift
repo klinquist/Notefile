@@ -39,6 +39,7 @@ final class NotesyncAppDelegate: NSObject, UIApplicationDelegate {
 @MainActor
 final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
+    private weak var menuBarRestoreWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.registerForRemoteNotifications()
@@ -140,6 +141,7 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        menuBarRestoreWindow = window
         enterMenuBarMode()
     }
 
@@ -164,33 +166,47 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showMainWindow() {
+        let targetWindow = menuBarRestoreWindow ?? restorableMainWindow()
         leaveMenuBarMode()
         Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(50))
-            self?.restoreMainWindow()
+            try? await Task.sleep(for: .milliseconds(150))
+            self?.restoreMainWindow(targetWindow)
         }
     }
 
-    private func restoreMainWindow() {
-        NSApplication.shared.activate(ignoringOtherApps: true)
+    private func restoreMainWindow(_ targetWindow: NSWindow?) {
+        NSApplication.shared.unhide(nil)
+
+        if let window = targetWindow ?? restorableMainWindow() {
+            restore(window)
+            return
+        }
+
+        NSApplication.shared.sendAction(#selector(NSResponder.newWindowForTab(_:)), to: nil, from: nil)
+    }
+
+    private func restorableMainWindow() -> NSWindow? {
         let visibleMainWindows = NSApplication.shared.windows.filter { window in
             !window.isMiniaturized && !window.isSheet && !window.title.localizedCaseInsensitiveContains("Settings")
         }
 
         if let window = visibleMainWindows.first {
-            window.makeKeyAndOrderFront(nil)
-            return
+            return window
         }
 
-        if let window = NSApplication.shared.windows.first(where: { !$0.isSheet && !$0.title.localizedCaseInsensitiveContains("Settings") }) {
-            if window.isMiniaturized {
-                window.deminiaturize(nil)
-            }
-            window.makeKeyAndOrderFront(nil)
-            return
+        return NSApplication.shared.windows.first {
+            !$0.isSheet && !$0.title.localizedCaseInsensitiveContains("Settings")
         }
+    }
 
-        NSApplication.shared.sendAction(#selector(NSResponder.newWindowForTab(_:)), to: nil, from: nil)
+    private func restore(_ window: NSWindow) {
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        menuBarRestoreWindow = nil
     }
 
     private static func postCloudKitChangeNotification(from userInfo: [AnyHashable: Any]) {
