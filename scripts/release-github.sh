@@ -16,7 +16,7 @@ if [[ -n "$(git status --short)" ]]; then
 fi
 
 MARKETING_VERSION="$(
-  python3 - "Notefile.xcodeproj/project.pbxproj" <<'PY'
+  python3 - "Notesync.xcodeproj/project.pbxproj" <<'PY'
 import pathlib
 import re
 import sys
@@ -41,7 +41,7 @@ if [[ "$NOTARIZE_DMG" == "1" && -z "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]]; then
 fi
 
 "$ROOT_DIR/scripts/build-macos-dmg.sh" "$VERSION"
-DMG_PATH="$ROOT_DIR/dist/Notefile-${VERSION}-macOS.dmg"
+DMG_PATH="$ROOT_DIR/dist/Notesync-${VERSION}-macOS.dmg"
 
 if [[ ! -f "$DMG_PATH" ]]; then
   echo "Expected DMG not found at $DMG_PATH" >&2
@@ -49,7 +49,7 @@ if [[ ! -f "$DMG_PATH" ]]; then
 fi
 
 if ! git rev-parse "$TAG" >/dev/null 2>&1; then
-  git tag -a "$TAG" -m "Notefile $VERSION"
+  git tag -a "$TAG" -m "Notesync $VERSION"
 fi
 
 git push origin "$TAG"
@@ -58,8 +58,8 @@ if gh release view "$TAG" >/dev/null 2>&1; then
   gh release upload "$TAG" "$DMG_PATH" --clobber
 else
   gh release create "$TAG" "$DMG_PATH" \
-    --title "Notefile $VERSION" \
-    --notes "macOS DMG release for Notefile $VERSION."
+    --title "Notesync $VERSION" \
+    --notes "macOS DMG release for Notesync $VERSION."
 fi
 
 echo "Published GitHub release $TAG"

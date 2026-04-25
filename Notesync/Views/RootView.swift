@@ -147,7 +147,7 @@ enum AppPreferences {
     }
 }
 
-struct NotefileSettingsView: View {
+struct NotesyncSettingsView: View {
     @AppStorage(AppPreferences.newEntryThresholdMinutesKey)
     private var newEntryThresholdMinutes = AppPreferences.defaultNewEntryThresholdMinutes
 
@@ -357,7 +357,7 @@ struct NotefileSettingsView: View {
         if value == 0 {
             return "Always start a new entry when reopening a note."
         }
-        return "If you reopen a note within \(thresholdLabel.lowercased()) of the last edit, Notefile continues the previous entry instead of starting a new one."
+        return "If you reopen a note within \(thresholdLabel.lowercased()) of the last edit, Notesync continues the previous entry instead of starting a new one."
     }
 }
 
@@ -397,7 +397,7 @@ struct RootView: View {
             BrowserGridScreen(
                 isRoot: true,
                 currentFolderRelativePath: nil,
-                title: currentFolderName ?? "Notefile",
+                title: currentFolderName ?? "Notesync",
                 subtitle: currentFolderName == nil ? repository.storageDescription : nil,
                 items: sortedItems(in: currentFolderPath),
                 favoriteItems: sortedFavoriteItems,
@@ -490,7 +490,7 @@ struct RootView: View {
         }
         .sheet(isPresented: $showingSettings) {
             NavigationStack {
-                NotefileSettingsView()
+                NotesyncSettingsView()
                     .navigationTitle("Settings")
 #if os(iOS)
                     .navigationBarTitleDisplayMode(.inline)
@@ -1271,7 +1271,7 @@ private struct BrowserGridScreen: View {
                 )
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("Notefile")
+                Text("Notesync")
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
 

@@ -3,7 +3,7 @@ import SwiftUI
 
 struct MacSyncSettingsView: View {
     var body: some View {
-        NotefileSettingsView()
+        NotesyncSettingsView()
     }
 }
 #endif

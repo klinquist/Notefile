@@ -3,11 +3,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PROJECT_PATH="$ROOT_DIR/Notefile.xcodeproj"
-SCHEME="Notefile"
+PROJECT_PATH="$ROOT_DIR/Notesync.xcodeproj"
+SCHEME="Notesync"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-$ROOT_DIR/.derived-release-macos}"
 BUILD_ROOT="${BUILD_ROOT:-$ROOT_DIR/dist/macos}"
-ARCHIVE_PATH="$BUILD_ROOT/Notefile.xcarchive"
+ARCHIVE_PATH="$BUILD_ROOT/Notesync.xcarchive"
 EXPORT_DIR="$BUILD_ROOT/export"
 DMG_STAGING_DIR="$BUILD_ROOT/dmg-staging"
 EXPORT_OPTIONS_PLIST="$BUILD_ROOT/export-options.plist"
@@ -28,7 +28,7 @@ if [[ ! -d "$PROJECT_PATH" ]]; then
 fi
 
 MARKETING_VERSION="$(
-  python3 - "$ROOT_DIR/Notefile.xcodeproj/project.pbxproj" <<'PY'
+  python3 - "$ROOT_DIR/Notesync.xcodeproj/project.pbxproj" <<'PY'
 import pathlib
 import re
 import sys
@@ -42,7 +42,7 @@ PY
 )"
 
 PROJECT_TEAM_ID="$(
-  python3 - "$ROOT_DIR/Notefile.xcodeproj/project.pbxproj" <<'PY'
+  python3 - "$ROOT_DIR/Notesync.xcodeproj/project.pbxproj" <<'PY'
 import pathlib
 import re
 import sys
@@ -58,7 +58,7 @@ if [[ -z "$DEVELOPMENT_TEAM" ]]; then
 fi
 
 VERSION="${1:-$MARKETING_VERSION}"
-APP_NAME="Notefile"
+APP_NAME="Notesync"
 APP_PATH="$EXPORT_DIR/$APP_NAME.app"
 DMG_PATH="$ROOT_DIR/dist/${APP_NAME}-${VERSION}-macOS.dmg"
 

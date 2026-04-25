@@ -24,13 +24,13 @@ struct NoteSearchResult: Identifiable, Hashable {
 
 @MainActor
 final class NoteRepository: ObservableObject {
-    private static let leakedContainerIdentifier = "com.linquist.notefile"
+    private static let leakedContainerIdentifier = "com.linquist.notesync"
     private static let notePackageExtension = "note"
-    private static let folderMetadataFileName = ".notefile-folder.json"
-    private static let noteManifestFileName = ".notefile-note.json"
+    private static let folderMetadataFileName = ".notesync-folder.json"
+    private static let noteManifestFileName = ".notesync-note.json"
     private static let entryFileExtension = "md"
-    private static let cloudKitContainerIdentifier = "iCloud.com.linquist.notefile"
-    private static let cloudRecordZoneID = CKRecordZone.ID(zoneName: "Notefile")
+    private static let cloudKitContainerIdentifier = "iCloud.com.linquist.notesync"
+    private static let cloudRecordZoneID = CKRecordZone.ID(zoneName: "Notesync")
     private static let folderRecordType = "Folder"
     private static let noteRecordType = "Note"
     private static let entryRecordType = "NoteEntry"
@@ -55,7 +55,7 @@ final class NoteRepository: ObservableObject {
     private var cachedRootURL: URL?
     private var cloudRecordZoneIsReady = false
     private var cloudSyncTail: Task<Void, Never>?
-    private let logger = Logger(subsystem: "com.linquist.notefile", category: "NoteRepository")
+    private let logger = Logger(subsystem: "com.linquist.notesync", category: "NoteRepository")
 
     init() {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -96,7 +96,7 @@ final class NoteRepository: ObservableObject {
             appropriateFor: nil,
             create: true
         )
-        let cacheRoot = appSupport.appendingPathComponent("NotefileCloudKitCache", isDirectory: true)
+        let cacheRoot = appSupport.appendingPathComponent("NotesyncCloudKitCache", isDirectory: true)
         try fileManager.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
         cachedRootURL = cacheRoot
         logger.info("storageRootURL using CloudKit cache root=\(cacheRoot.path, privacy: .public)")
@@ -833,7 +833,7 @@ final class NoteRepository: ObservableObject {
     }
 
     private func legacyMetadataURL(for noteURL: URL) -> URL {
-        noteURL.deletingPathExtension().appendingPathExtension("notefile.json")
+        noteURL.deletingPathExtension().appendingPathExtension("notesync.json")
     }
 
     private func uniqueDirectoryName(for baseName: String, in folderURL: URL, excluding excludedName: String? = nil) throws -> String {

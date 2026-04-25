@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct NotefileApp: App {
+struct NotesyncApp: App {
     @StateObject private var repository: NoteRepository
 #if os(macOS)
     @StateObject private var localMirrorSyncService: LocalMirrorSyncService

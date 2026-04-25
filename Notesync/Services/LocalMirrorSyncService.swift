@@ -26,8 +26,8 @@ private final class FileEventStreamBox: @unchecked Sendable {
 
 @MainActor
 final class LocalMirrorSyncService: ObservableObject {
-    private static let leakedContainerIdentifier = "com.linquist.notefile"
-    private static let folderMetadataFileName = ".notefile-folder.json"
+    private static let leakedContainerIdentifier = "com.linquist.notesync"
+    private static let folderMetadataFileName = ".notesync-folder.json"
     private static let notePackageExtension = "note"
 
     @Published private(set) var mirroredFolderURL: URL?
@@ -40,8 +40,8 @@ final class LocalMirrorSyncService: ObservableObject {
     private var fileEventStream: FileEventStreamBox?
     private var isSyncing = false
     private var needsFollowUpSync = false
-    private let fileEventQueue = DispatchQueue(label: "com.linquist.notefile.localMirrorEvents")
-    private let logger = Logger(subsystem: "com.linquist.notefile", category: "LocalMirrorSync")
+    private let fileEventQueue = DispatchQueue(label: "com.linquist.notesync.localMirrorEvents")
+    private let logger = Logger(subsystem: "com.linquist.notesync", category: "LocalMirrorSync")
 
     init(repository: NoteRepository) {
         self.repository = repository

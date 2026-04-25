@@ -9,7 +9,7 @@ fi
 
 MARKETING_VERSION="$1"
 BUILD_NUMBER="${2:-}"
-PROJECT_FILE="Notefile.xcodeproj/project.pbxproj"
+PROJECT_FILE="Notesync.xcodeproj/project.pbxproj"
 
 if [[ ! -f "$PROJECT_FILE" ]]; then
   echo "Could not find $PROJECT_FILE" >&2

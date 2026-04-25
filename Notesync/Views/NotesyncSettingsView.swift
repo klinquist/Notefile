@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct NotefileSettingsView: View {
+struct NotesyncSettingsView: View {
     @AppStorage(AppPreferences.newEntryThresholdMinutesKey)
     private var newEntryThresholdMinutes = AppPreferences.defaultNewEntryThresholdMinutes
 

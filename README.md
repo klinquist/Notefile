@@ -1,12 +1,12 @@
-# Notefile
+# Notesync
 
 <table>
   <tr>
     <td width="220" valign="top">
-      <img src="image.png" alt="Notefile icon" width="180" />
+      <img src="image.png" alt="Notesync icon" width="180" />
     </td>
     <td valign="top">
-      <p>Notefile is a simple notes app built for organizing quick project thoughts into folders, notes, and timeline-style entries, then keeping them synchronized across Mac, iPhone, and iPad with iCloud.</p>
+      <p>Notesync is a simple notes app built for organizing quick project thoughts into folders, notes, and timeline-style entries, then keeping them synchronized across Mac, iPhone, and iPad with iCloud.</p>
       <p>Notes are also mirrored to the local filesystem as Markdown files, making them easy to read, back up, edit, or use with project management agents and other developer workflows.</p>
     </td>
   </tr>
@@ -24,7 +24,7 @@
 
 ## Markdown Mirror
 
-On macOS, Notefile can mirror the CloudKit-backed note tree into a normal folder on disk. Folders become folders, and each note is exported as a single `.md` file:
+On macOS, Notesync can mirror the CloudKit-backed note tree into a normal folder on disk. Folders become folders, and each note is exported as a single `.md` file:
 
 ```text
 <mirror root>/
@@ -37,18 +37,18 @@ This keeps notes available to local tools, scripts, editors, backup systems, and
 
 ## Storage
 
-- Cloud sync uses the private CloudKit container `iCloud.com.linquist.notefile`
+- Cloud sync uses the private CloudKit container `iCloud.com.linquist.notesync`
 - The app keeps a local cache for fast editing and offline fallback
 - Notes are stored internally as `.note` packages with one Markdown file per entry
 - The macOS mirror combines each package into a single readable Markdown file
 
 ## Development
 
-- `Notefile.xcodeproj` - Xcode project
-- `Notefile/App` - app entry point
-- `Notefile/Models` - shared models and preferences
-- `Notefile/Services` - repository, Markdown codec, CloudKit sync, and macOS mirror sync
-- `Notefile/Views` - browser, creation sheet, note editor, and settings UI
+- `Notesync.xcodeproj` - Xcode project
+- `Notesync/App` - app entry point
+- `Notesync/Models` - shared models and preferences
+- `Notesync/Services` - repository, Markdown codec, CloudKit sync, and macOS mirror sync
+- `Notesync/Views` - browser, creation sheet, note editor, and settings UI
 - `scripts/set-version.sh` - updates `MARKETING_VERSION` and optionally `CURRENT_PROJECT_VERSION`
 - `scripts/build-macos-dmg.sh` - builds a macOS release app and packages it into a DMG
 - `scripts/release-github.sh` - tags the current commit and publishes the DMG to GitHub Releases
@@ -70,7 +70,7 @@ Build a local macOS DMG:
 That writes the DMG to:
 
 ```text
-dist/Notefile-<version>-macOS.dmg
+dist/Notesync-<version>-macOS.dmg
 ```
 
 Publish a GitHub release for the current commit:
@@ -96,14 +96,14 @@ To build a signed and notarized DMG:
 ```sh
 SIGN_FOR_DISTRIBUTION=1 \
 NOTARIZE_DMG=1 \
-NOTARYTOOL_KEYCHAIN_PROFILE=notefile-notary \
+NOTARYTOOL_KEYCHAIN_PROFILE=notesync-notary \
 ./scripts/build-macos-dmg.sh
 ```
 
 Store notarization credentials in your keychain once with:
 
 ```sh
-xcrun notarytool store-credentials notefile-notary \
+xcrun notarytool store-credentials notesync-notary \
   --apple-id "<apple-id>" \
   --team-id "<team-id>"
 ```

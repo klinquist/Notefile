@@ -1,7 +1,7 @@
 import Foundation
 
 enum MarkdownNoteCodec {
-    private static let metadataHeading = "## Notefile"
+    private static let metadataHeading = "## Notesync"
     private static let storageDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
