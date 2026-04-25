@@ -343,6 +343,7 @@ struct NoteEditorView: View {
         }
         entryPendingDeletion = nil
         deleteEntry(at: index)
+        savePendingChanges()
     }
 
     private func addNextEntry() {
