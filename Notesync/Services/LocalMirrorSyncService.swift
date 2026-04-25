@@ -321,7 +321,7 @@ final class LocalMirrorSyncService: ObservableObject {
         guard mirroredFolderURL != nil else { return }
 
         if isSyncing {
-            needsFollowUpSync = true
+            logger.debug("handleMirrorFileEvents ignoredWhileSyncing count=\(paths.count)")
             return
         }
 

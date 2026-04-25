@@ -320,7 +320,8 @@ final class NoteRepository: ObservableObject {
             originalRelativePath: relativePath,
             reloadBrowser: false,
             mergeWithExisting: false,
-            sourceModifiedAt: sourceModifiedAt
+            sourceModifiedAt: sourceModifiedAt,
+            notifyLocalMirrorSync: false
         )
     }
 
@@ -338,8 +339,7 @@ final class NoteRepository: ObservableObject {
             }
 
             note.entries.append(NoteEntry(timestamp: Date(), text: ""))
-            note = try await save(note: note, originalRelativePath: relativePath, reloadBrowser: true)
-            logger.debug("prepareNoteForEditing appendedDraft relativePath=\(relativePath, privacy: .public) entryCount=\(note.entries.count)")
+            logger.debug("prepareNoteForEditing appendedInMemoryDraft relativePath=\(relativePath, privacy: .public) entryCount=\(note.entries.count)")
         } else {
             logger.debug("prepareNoteForEditing reusedDraft relativePath=\(relativePath, privacy: .public) entryCount=\(note.entries.count)")
         }
@@ -421,6 +421,7 @@ final class NoteRepository: ObservableObject {
             reloadBrowser: reloadBrowser,
             mergeWithExisting: true,
             sourceModifiedAt: nil,
+            notifyLocalMirrorSync: true,
             deletedEntryIDs: deletedEntryIDs
         )
     }
@@ -445,6 +446,7 @@ final class NoteRepository: ObservableObject {
         reloadBrowser: Bool,
         mergeWithExisting: Bool,
         sourceModifiedAt: Date?,
+        notifyLocalMirrorSync: Bool,
         deletedEntryIDs: Set<UUID> = []
     ) async throws -> NoteDocument {
         let cleanTitle = sanitizeName(note.title, fallback: "Untitled Note")
@@ -487,7 +489,9 @@ final class NoteRepository: ObservableObject {
             try reloadLocalBrowser()
         }
 
-        notifyLocalMirrorSyncNeeded("saveNote")
+        if notifyLocalMirrorSync {
+            notifyLocalMirrorSyncNeeded("saveNote")
+        }
         return savedNote
     }
 
@@ -561,6 +565,43 @@ final class NoteRepository: ObservableObject {
         }
 
         logger.debug("persistNotePackage path=\(note.relativePath, privacy: .public) package=\(packageURL.path, privacy: .public) persistedEntries=\(persistedEntries.count)")
+    }
+
+    private func persistNotePackageIfNeeded(note: NoteDocument, modifiedAt: Date) throws {
+        let packageURL = try notePackageURL(for: note.relativePath)
+        if notePackageMatches(note: note, at: packageURL),
+           let packageModifiedAt = try? notePackageModificationDate(at: packageURL),
+           abs(packageModifiedAt.timeIntervalSince(modifiedAt)) <= 0.5 {
+            logger.debug("persistNotePackage skippedUnchanged path=\(note.relativePath, privacy: .public)")
+            return
+        }
+
+        try persistNotePackage(note: note, modifiedAt: modifiedAt)
+    }
+
+    private func notePackageMatches(note: NoteDocument, at packageURL: URL) -> Bool {
+        guard fileManager.fileExists(atPath: packageURL.path),
+              loadNoteMetadataFromPackage(at: packageURL) == note.metadata else {
+            return false
+        }
+
+        let entries = persistedEntries(from: note.entries)
+        guard let entryURLs = try? noteEntryURLs(at: packageURL),
+              entryURLs.count == entries.count else {
+            return false
+        }
+
+        let entryURLsByName = Dictionary(uniqueKeysWithValues: entryURLs.map { ($0.lastPathComponent, $0) })
+        for entry in entries {
+            let fileName = entryFileName(for: entry)
+            guard let entryURL = entryURLsByName[fileName],
+                  let existingText = try? String(contentsOf: entryURL, encoding: .utf8),
+                  existingText == entry.text else {
+                return false
+            }
+        }
+
+        return true
     }
 
     private func folderURL(for relativePath: String?) throws -> URL {
@@ -1137,15 +1178,12 @@ final class NoteRepository: ObservableObject {
         let noteRecords = cloudRecords.filter { $0.recordType == Self.noteRecordType }
         let entryRecords = cloudRecords.filter { $0.recordType == Self.entryRecordType }
         let rootURL = try storageRootURL()
-
-        if fileManager.fileExists(atPath: rootURL.path) {
-            try fileManager.removeItem(at: rootURL)
-        }
         try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
 
         let folders = folderRecords
             .compactMap(folderSnapshot(from:))
             .sorted { directoryDepth(of: $0.relativePath) < directoryDepth(of: $1.relativePath) }
+        var refreshedNotePaths: Set<String> = []
 
         for folder in folders {
             let folderURL = try folderURL(for: folder.relativePath)
@@ -1158,6 +1196,7 @@ final class NoteRepository: ObservableObject {
 
         for noteRecord in noteRecords {
             guard let note = noteSnapshot(from: noteRecord) else { continue }
+            refreshedNotePaths.insert(note.relativePath)
             let entries = (entriesByNotePath[note.relativePath] ?? [])
                 .map { NoteEntry(id: $0.id, timestamp: $0.timestamp, text: $0.text) }
                 .sorted { lhs, rhs in
@@ -1172,8 +1211,14 @@ final class NoteRepository: ObservableObject {
                 metadata: note.metadata,
                 entries: entries
             )
-            try persistNotePackage(note: document, modifiedAt: note.modifiedAt)
+            try persistNotePackageIfNeeded(note: document, modifiedAt: note.modifiedAt)
         }
+
+        try pruneCloudCache(
+            rootURL: rootURL,
+            validFolderPaths: Set(folders.map(\.relativePath)),
+            validNotePaths: refreshedNotePaths
+        )
 
         storageDescription = "iCloud"
         logger.info("refreshCloudCache folders=\(folders.count) notes=\(noteRecords.count) entries=\(entryRecords.count)")
@@ -1200,7 +1245,66 @@ final class NoteRepository: ObservableObject {
             metadata: note.metadata,
             entries: entries
         )
-        try persistNotePackage(note: document, modifiedAt: note.modifiedAt)
+        try persistNotePackageIfNeeded(note: document, modifiedAt: note.modifiedAt)
+    }
+
+    private func pruneCloudCache(
+        rootURL: URL,
+        validFolderPaths: Set<String>,
+        validNotePaths: Set<String>
+    ) throws {
+        guard let enumerator = fileManager.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: []
+        ) else { return }
+
+        var directoriesToRemove: [URL] = []
+        var filesToRemove: [URL] = []
+
+        while let url = enumerator.nextObject() as? URL {
+            let relativePath = relativePath(for: url)
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey])
+
+            if values.isDirectory == true {
+                if url.pathExtension.lowercased() == Self.notePackageExtension {
+                    let noteRelativePath = logicalNoteRelativePath(
+                        for: url,
+                        parentRelativePath: parentPath(for: relativePath)
+                    )
+                    if !validNotePaths.contains(noteRelativePath) {
+                        directoriesToRemove.append(url)
+                    }
+                    enumerator.skipDescendants()
+                    continue
+                }
+
+                if !validFolderPaths.contains(relativePath) {
+                    directoriesToRemove.append(url)
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+
+            if url.lastPathComponent == Self.folderMetadataFileName {
+                let folderPath = parentPath(for: relativePath) ?? ""
+                if !validFolderPaths.contains(folderPath) {
+                    filesToRemove.append(url)
+                }
+            } else if url.pathExtension.lowercased() == "md" && !validNotePaths.contains(relativePath) {
+                filesToRemove.append(url)
+            }
+        }
+
+        for url in filesToRemove {
+            try fileManager.removeItem(at: url)
+        }
+
+        for url in directoriesToRemove.sorted(by: { $0.pathComponents.count > $1.pathComponents.count }) {
+            if fileManager.fileExists(atPath: url.path) {
+                try fileManager.removeItem(at: url)
+            }
+        }
     }
 
     private func uploadFolderTree(at folderURL: URL) async throws {
