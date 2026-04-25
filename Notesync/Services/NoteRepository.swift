@@ -170,6 +170,43 @@ final class NoteRepository: ObservableObject {
         return updatedRelativePath
     }
 
+    func updateFolder(relativePath: String, name: String, accentStyle: AccentStyle) async throws -> String {
+        let currentURL = try folderURL(for: relativePath)
+        guard fileManager.fileExists(atPath: currentURL.path) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
+        let parentRelativePath = parentPath(for: relativePath)
+        let parentURL = try folderURL(for: parentRelativePath)
+        let sanitizedName = sanitizeName(name, fallback: "New Folder")
+        let targetName = try uniqueDirectoryName(for: sanitizedName, in: parentURL, excluding: currentURL.lastPathComponent)
+        let targetURL = parentURL.appendingPathComponent(targetName, isDirectory: true)
+        let didMove = currentURL != targetURL
+
+        if didMove {
+            try fileManager.moveItem(at: currentURL, to: targetURL)
+        }
+
+        var metadata = loadFolderMetadata(at: targetURL) ?? .default
+        metadata.accentStyle = accentStyle
+        try saveFolderMetadata(metadata, at: targetURL)
+
+        let updatedRelativePath = self.relativePath(for: targetURL)
+        let modifiedAt = (try? targetURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
+        queueCloudSync("updateFolder") { repository in
+            if didMove {
+                try await repository.deleteCloudTree(relativePath: relativePath)
+                try await repository.uploadFolderTree(at: targetURL)
+            } else {
+                try await repository.uploadFolder(relativePath: updatedRelativePath, metadata: metadata, modifiedAt: modifiedAt)
+            }
+        }
+        logger.info("updateFolder from=\(relativePath, privacy: .public) to=\(updatedRelativePath, privacy: .public)")
+        try reloadLocalBrowser()
+        notifyLocalMirrorSyncNeeded("updateFolder")
+        return updatedRelativePath
+    }
+
     func createNote(title: String, emoji: String, accentStyle: AccentStyle, parentRelativePath: String?) async throws -> String {
         let cleanTitle = sanitizeName(title, fallback: "Untitled Note")
         let relativePath = try uniqueNoteRelativePath(
@@ -191,6 +228,15 @@ final class NoteRepository: ObservableObject {
         try reloadLocalBrowser()
         notifyLocalMirrorSyncNeeded("createNote")
         return relativePath
+    }
+
+    func updateNote(relativePath: String, title: String, accentStyle: AccentStyle) async throws -> String {
+        var note = try loadNote(relativePath: relativePath)
+        note.title = title
+        note.metadata.accentStyle = accentStyle
+        let savedNote = try await save(note: note, originalRelativePath: relativePath, reloadBrowser: true)
+        logger.info("updateNote from=\(relativePath, privacy: .public) to=\(savedNote.relativePath, privacy: .public)")
+        return savedNote.relativePath
     }
 
     func delete(item: BrowserItem) async throws {

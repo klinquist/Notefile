@@ -389,6 +389,7 @@ struct RootView: View {
     @State private var showingSettings = false
     @State private var showingSearch = false
     @State private var itemPendingDeletion: BrowserItem?
+    @State private var itemPendingEdit: BrowserItem?
     @State private var browserRefreshTask: Task<Void, Never>?
     @AppStorage("RootView.SortMode") private var sortModeRawValue = SortMode.alphabetical.rawValue
 
@@ -404,6 +405,7 @@ struct RootView: View {
                 sortMode: sortMode,
                 sortSelection: sortSelection,
                 onSelect: openItem,
+                onRequestEdit: { itemPendingEdit = $0 },
                 onRequestDelete: { itemPendingDeletion = $0 },
                 onToggleFavorite: toggleFavorite,
                 onCreateFolder: { showingCreateFolder = true },
@@ -429,6 +431,7 @@ struct RootView: View {
                         sortMode: sortMode,
                         sortSelection: sortSelection,
                         onSelect: openItem,
+                        onRequestEdit: { itemPendingEdit = $0 },
                         onRequestDelete: { itemPendingDeletion = $0 },
                         onToggleFavorite: toggleFavorite,
                         onCreateFolder: { showingCreateFolder = true },
@@ -500,6 +503,15 @@ struct RootView: View {
                 suggestedAccentStyle: suggestedAccentStyle,
                 submit: createNote
             )
+        }
+        .sheet(item: $itemPendingEdit) { item in
+            EditItemSheet(
+                kind: item.kind,
+                initialName: item.name,
+                initialAccentStyle: item.accentStyle
+            ) { name, accentStyle in
+                try await update(item, name: name, accentStyle: accentStyle)
+            }
         }
         .sheet(isPresented: $showingSettings) {
             NavigationStack {
@@ -725,6 +737,15 @@ struct RootView: View {
         path.append(.note(relativePath, nil))
     }
 
+    private func update(_ item: BrowserItem, name: String, accentStyle: AccentStyle) async throws {
+        switch item.kind {
+        case .folder:
+            _ = try await repository.updateFolder(relativePath: item.relativePath, name: name, accentStyle: accentStyle)
+        case .note:
+            _ = try await repository.updateNote(relativePath: item.relativePath, title: name, accentStyle: accentStyle)
+        }
+    }
+
     private func delete(_ item: BrowserItem) {
         itemPendingDeletion = nil
         Task {
@@ -830,6 +851,7 @@ private struct BrowserGridScreen: View {
     let sortMode: RootView.SortMode
     let sortSelection: Binding<RootView.SortMode>
     let onSelect: (BrowserItem) -> Void
+    let onRequestEdit: (BrowserItem) -> Void
     let onRequestDelete: (BrowserItem) -> Void
     let onToggleFavorite: (BrowserItem) -> Void
     let onCreateFolder: () -> Void
@@ -1109,6 +1131,12 @@ private struct BrowserGridScreen: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            Button {
+                onRequestEdit(item)
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+
             Button {
                 onToggleFavorite(item)
             } label: {

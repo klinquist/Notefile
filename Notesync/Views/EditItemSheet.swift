@@ -5,48 +5,39 @@ import UIKit
 import AppKit
 #endif
 
-struct CreateItemSheet: View {
+struct EditItemSheet: View {
     private enum Field: Hashable {
         case name
-        case emoji
-    }
-
-    enum Mode {
-        case folder
-        case note
-
-        var title: String {
-            switch self {
-            case .folder: "New Folder"
-            case .note: "New Note"
-            }
-        }
-
-        var defaultEmoji: String {
-            switch self {
-            case .folder: "📁"
-            case .note: "📝"
-            }
-        }
     }
 
     @Environment(\.dismiss) private var dismiss
 
-    let mode: Mode
-    let parentLabel: String?
-    let suggestedAccentStyle: AccentStyle
-    let submit: (String, String, AccentStyle) async throws -> Void
+    let kind: BrowserItem.Kind
+    let initialName: String
+    let initialAccentStyle: AccentStyle
+    let submit: (String, AccentStyle) async throws -> Void
 
-    @State private var name = ""
-    @State private var emoji = ""
-    @State private var accentStyle: AccentStyle = .mint
-    @State private var customColor = AccentStyle.mint.color
+    @State private var name: String
+    @State private var accentStyle: AccentStyle
+    @State private var customColor: Color
     @State private var errorMessage: String?
     @State private var isSaving = false
-#if os(iOS)
-    @State private var isEmojiKeyboardFocused = false
-#endif
     @FocusState private var focusedField: Field?
+
+    init(
+        kind: BrowserItem.Kind,
+        initialName: String,
+        initialAccentStyle: AccentStyle,
+        submit: @escaping (String, AccentStyle) async throws -> Void
+    ) {
+        self.kind = kind
+        self.initialName = initialName
+        self.initialAccentStyle = initialAccentStyle
+        self.submit = submit
+        _name = State(initialValue: initialName)
+        _accentStyle = State(initialValue: initialAccentStyle)
+        _customColor = State(initialValue: initialAccentStyle.color)
+    }
 
     var body: some View {
         NavigationStack {
@@ -67,40 +58,18 @@ struct CreateItemSheet: View {
                         detailCard {
                             VStack(alignment: .leading, spacing: 14) {
                                 fieldLabel("Name")
-                                HStack(spacing: 12) {
-                                    TextField(mode == .note ? "Note Name" : "Folder Name", text: $name)
-                                        .focused($focusedField, equals: .name)
-                                        .submitLabel(.done)
-                                        .onSubmit {
-                                            guard canSubmit else { return }
-                                            save()
-                                        }
-                                        .textFieldStyle(.plain)
-                                        .font(.system(.title3, design: .rounded).weight(.semibold))
-
-#if os(iOS)
-                                    Button {
-                                        focusedField = nil
-                                        Task { @MainActor in
-                                            isEmojiKeyboardFocused = true
-                                        }
-                                    } label: {
-                                        Text(displayEmoji)
-                                            .font(.system(size: 28))
-                                            .frame(width: 36, alignment: .trailing)
+                                TextField(kind == .note ? "Note Name" : "Folder Name", text: $name)
+                                    .focused($focusedField, equals: .name)
+                                    .submitLabel(.done)
+                                    .onSubmit {
+                                        guard canSubmit else { return }
+                                        save()
                                     }
-                                    .buttonStyle(.plain)
-#else
-                                    MacEmojiPickerField(
-                                        text: $emoji,
-                                        displayedEmoji: displayEmoji
-                                    )
-                                    .frame(width: 36, height: 32)
-#endif
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 14)
-                                .background(inputBackground)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 14)
+                                    .background(inputBackground)
                             }
                         }
 
@@ -144,43 +113,14 @@ struct CreateItemSheet: View {
                     .padding(.bottom, 32)
                 }
             }
-#if os(iOS)
-            .overlay(alignment: .topLeading) {
-                EmojiKeyboardField(
-                    text: $emoji,
-                    displayedEmoji: displayEmoji,
-                    isFocused: $isEmojiKeyboardFocused
-                )
-                .frame(width: 1, height: 1)
-                .opacity(0.01)
-                .allowsHitTesting(false)
-            }
-#endif
-            .navigationTitle(mode.title)
+            .navigationTitle(kind == .note ? "Edit Note" : "Edit Folder")
 #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
 #endif
             .task {
-                if emoji.isEmpty {
-                    emoji = mode.defaultEmoji
-                }
-
-                accentStyle = suggestedAccentStyle
-                customColor = suggestedAccentStyle.color
-
                 guard focusedField == nil else { return }
                 try? await Task.sleep(for: .milliseconds(150))
-#if os(iOS)
-                isEmojiKeyboardFocused = false
-#endif
                 focusedField = .name
-            }
-            .onChange(of: focusedField) { _, newValue in
-#if os(iOS)
-                if newValue != .emoji {
-                    isEmojiKeyboardFocused = false
-                }
-#endif
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -189,7 +129,7 @@ struct CreateItemSheet: View {
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(mode.title) {
+                    Button("Save") {
                         save()
                     }
                     .disabled(!canSubmit)
@@ -266,6 +206,12 @@ struct CreateItemSheet: View {
                 Circle()
                     .fill(customColor)
                     .frame(width: 28, height: 28)
+
+                if isCustomColorSelected {
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                }
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -296,28 +242,9 @@ struct CreateItemSheet: View {
         )
     }
 
-    private var isCustomColorSelected: Bool {
-        if case .custom = accentStyle {
-            return true
-        }
-        return false
-    }
-
     private var inputBackground: some View {
         RoundedRectangle(cornerRadius: 18, style: .continuous)
             .fill(sheetBaseColor.opacity(0.88))
-    }
-
-    private var locationLabel: String {
-        if let parentLabel {
-            return parentLabel
-        }
-        return "Top Level"
-    }
-
-    private var displayEmoji: String {
-        let trimmed = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? mode.defaultEmoji : emoji
     }
 
     private var sheetBaseColor: Color {
@@ -340,6 +267,13 @@ struct CreateItemSheet: View {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving
     }
 
+    private var isCustomColorSelected: Bool {
+        if case .custom = accentStyle {
+            return true
+        }
+        return false
+    }
+
     private func save() {
         guard canSubmit else { return }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -347,7 +281,7 @@ struct CreateItemSheet: View {
         errorMessage = nil
         Task {
             do {
-                try await submit(trimmedName, emoji, accentStyle)
+                try await submit(trimmedName, accentStyle)
                 await MainActor.run {
                     dismiss()
                 }
@@ -360,133 +294,3 @@ struct CreateItemSheet: View {
         }
     }
 }
-
-#if os(iOS)
-private struct EmojiKeyboardField: UIViewRepresentable {
-    @Binding var text: String
-    let displayedEmoji: String
-    @Binding var isFocused: Bool
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
-    }
-
-    func makeUIView(context: Context) -> EmojiUITextField {
-        let textField = EmojiUITextField()
-        textField.delegate = context.coordinator
-        textField.textAlignment = .right
-        textField.font = UIFont.systemFont(ofSize: 28)
-        textField.tintColor = .clear
-        textField.autocorrectionType = .no
-        textField.spellCheckingType = .no
-        textField.smartDashesType = .no
-        textField.smartQuotesType = .no
-        textField.smartInsertDeleteType = .no
-        textField.text = displayedEmoji
-        textField.addTarget(context.coordinator, action: #selector(Coordinator.textDidChange(_:)), for: .editingChanged)
-        return textField
-    }
-
-    func updateUIView(_ uiView: EmojiUITextField, context: Context) {
-        if uiView.text != displayedEmoji {
-            uiView.text = displayedEmoji
-        }
-
-        if isFocused {
-            if !uiView.isFirstResponder {
-                uiView.becomeFirstResponder()
-            }
-        } else if uiView.isFirstResponder {
-            uiView.resignFirstResponder()
-        }
-    }
-
-    final class Coordinator: NSObject, UITextFieldDelegate {
-        private let text: Binding<String>
-
-        init(text: Binding<String>) {
-            self.text = text
-        }
-
-        @objc func textDidChange(_ textField: UITextField) {
-            let raw = textField.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if let lastCharacter = raw.last {
-                text.wrappedValue = String(lastCharacter)
-            } else {
-                text.wrappedValue = ""
-            }
-        }
-    }
-}
-
-private final class EmojiUITextField: UITextField {
-    override var textInputContextIdentifier: String? { "" }
-
-    override var textInputMode: UITextInputMode? {
-        for inputMode in UITextInputMode.activeInputModes where inputMode.primaryLanguage == "emoji" {
-            return inputMode
-        }
-        return super.textInputMode
-    }
-}
-#endif
-
-#if os(macOS)
-private struct MacEmojiPickerField: NSViewRepresentable {
-    @Binding var text: String
-    let displayedEmoji: String
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
-    }
-
-    func makeNSView(context: Context) -> EmojiPickerTextField {
-        let textField = EmojiPickerTextField()
-        textField.delegate = context.coordinator
-        textField.isBordered = false
-        textField.drawsBackground = false
-        textField.focusRingType = .none
-        textField.isEditable = true
-        textField.isSelectable = true
-        textField.alignment = .right
-        textField.font = .systemFont(ofSize: 28)
-        textField.lineBreakMode = .byClipping
-        textField.maximumNumberOfLines = 1
-        textField.usesSingleLineMode = true
-        textField.stringValue = displayedEmoji
-        return textField
-    }
-
-    func updateNSView(_ nsView: EmojiPickerTextField, context: Context) {
-        if nsView.stringValue != displayedEmoji {
-            nsView.stringValue = displayedEmoji
-        }
-    }
-
-    final class Coordinator: NSObject, NSTextFieldDelegate {
-        private let text: Binding<String>
-
-        init(text: Binding<String>) {
-            self.text = text
-        }
-
-        func controlTextDidChange(_ obj: Notification) {
-            guard let textField = obj.object as? NSTextField else { return }
-            let raw = textField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let lastCharacter = raw.last {
-                text.wrappedValue = String(lastCharacter)
-                textField.stringValue = String(lastCharacter)
-            } else {
-                text.wrappedValue = ""
-            }
-        }
-    }
-}
-
-private final class EmojiPickerTextField: NSTextField {
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-        NSApp.orderFrontCharacterPalette(nil)
-    }
-}
-#endif

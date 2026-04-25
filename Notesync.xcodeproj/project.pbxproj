@@ -19,6 +19,7 @@
 		A0000000000000000000001A /* NoteEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000A /* NoteEditorView.swift */; };
 		A0000000000000000000001B /* LocalMirrorSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000B /* LocalMirrorSyncService.swift */; };
 		A0000000000000000000001C /* MacSyncSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000C /* MacSyncSettingsView.swift */; };
+		A00000000000000000000025 /* EditItemSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000026 /* EditItemSheet.swift */; };
 		A0000000000000000000001D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000D /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -41,6 +42,7 @@
 		A00000000000000000000010 /* Notesync.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Notesync.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000020 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A00000000000000000000024 /* InfoMac.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = InfoMac.plist; sourceTree = "<group>"; };
+		A00000000000000000000026 /* EditItemSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditItemSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -116,6 +118,7 @@
 			children = (
 				A00000000000000000000008 /* RootView.swift */,
 				A00000000000000000000009 /* CreateItemSheet.swift */,
+				A00000000000000000000026 /* EditItemSheet.swift */,
 				A0000000000000000000000A /* NoteEditorView.swift */,
 				A0000000000000000000000C /* MacSyncSettingsView.swift */,
 			);
@@ -213,6 +216,7 @@
 				A00000000000000000000017 /* NoteRepository.swift in Sources */,
 				A00000000000000000000018 /* RootView.swift in Sources */,
 				A00000000000000000000019 /* CreateItemSheet.swift in Sources */,
+				A00000000000000000000025 /* EditItemSheet.swift in Sources */,
 				A0000000000000000000001A /* NoteEditorView.swift in Sources */,
 				A0000000000000000000001B /* LocalMirrorSyncService.swift in Sources */,
 				A0000000000000000000001C /* MacSyncSettingsView.swift in Sources */,
