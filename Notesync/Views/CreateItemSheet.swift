@@ -290,11 +290,12 @@ struct CreateItemSheet: View {
 
     private func save() {
         guard canSubmit else { return }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         isSaving = true
         errorMessage = nil
         Task {
             do {
-                try await submit(name, emoji, accentStyle)
+                try await submit(trimmedName, emoji, accentStyle)
                 await MainActor.run {
                     dismiss()
                 }

@@ -3,6 +3,14 @@ import CryptoKit
 import Foundation
 import OSLog
 
+extension Notification.Name {
+    static let notesyncCloudKitRemoteChange = Notification.Name("notesyncCloudKitRemoteChange")
+}
+
+enum NotesyncCloudKitSubscription {
+    static let recordZoneSubscriptionID = "notesync-cloud-record-zone"
+}
+
 struct NoteSearchResult: Identifiable, Hashable {
     enum Kind: Hashable {
         case folder
@@ -31,6 +39,7 @@ final class NoteRepository: ObservableObject {
     private static let entryFileExtension = "md"
     private static let cloudKitContainerIdentifier = "iCloud.com.linquist.notesync"
     private static let cloudRecordZoneID = CKRecordZone.ID(zoneName: "Notesync")
+    private static let cloudRecordZoneSubscriptionID = NotesyncCloudKitSubscription.recordZoneSubscriptionID
     private static let folderRecordType = "Folder"
     private static let noteRecordType = "Note"
     private static let entryRecordType = "NoteEntry"
@@ -55,13 +64,25 @@ final class NoteRepository: ObservableObject {
     private var cachedRootURL: URL?
     private var cloudRecordZoneIsReady = false
     private var cloudSyncTail: Task<Void, Never>?
+    private var cloudRemoteChangeObserver: NSObjectProtocol?
+    private var cloudRemoteRefreshTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "com.linquist.notesync", category: "NoteRepository")
 
     init() {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        cloudRemoteChangeObserver = NotificationCenter.default.addObserver(
+            forName: .notesyncCloudKitRemoteChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.scheduleCloudRemoteRefresh()
+            }
+        }
 
         Task {
             await loadBrowser()
+            await ensureCloudRemoteChangeSubscription()
         }
     }
 
@@ -311,6 +332,17 @@ final class NoteRepository: ObservableObject {
         return (try? legacyURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
     }
 
+#if os(macOS)
+    func noteStorageURLForWatching(relativePath: String) throws -> URL {
+        let packageURL = try notePackageURL(for: relativePath)
+        if fileManager.fileExists(atPath: packageURL.path) {
+            return packageURL
+        }
+
+        return try legacyNoteURL(for: relativePath)
+    }
+#endif
+
     func search(query: String) -> [NoteSearchResult] {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedQuery.isEmpty else { return [] }
@@ -355,6 +387,10 @@ final class NoteRepository: ObservableObject {
         case .note:
             return parentPath(for: item.relativePath)
         }
+    }
+
+    func waitForPendingCloudSync() async {
+        await cloudSyncTail?.value
     }
 
     private func save(
@@ -411,6 +447,18 @@ final class NoteRepository: ObservableObject {
 
     private func notifyLocalMirrorSyncNeeded(_ reason: String) {
         localMirrorSyncHandler?(reason)
+    }
+
+    private func scheduleCloudRemoteRefresh() {
+        cloudRemoteRefreshTask?.cancel()
+        cloudRemoteRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(750))
+            guard !Task.isCancelled else { return }
+            await self?.loadBrowser()
+            await MainActor.run {
+                self?.notifyLocalMirrorSyncNeeded("cloudRemoteChange")
+            }
+        }
     }
 
     private func reloadLocalBrowser() throws {
@@ -1293,6 +1341,59 @@ final class NoteRepository: ObservableObject {
             return record
         }
         return CKRecord(recordType: recordType, recordID: recordID(recordType: recordType, key: key))
+    }
+
+    private func ensureCloudRemoteChangeSubscription() async {
+        do {
+            guard try await cloudAccountIsAvailable() else { return }
+            try await ensureCloudRecordZoneExists()
+
+            if try await fetchCloudSubscription(id: Self.cloudRecordZoneSubscriptionID) != nil {
+                logger.info("ensureCloudRemoteChangeSubscription already registered")
+                return
+            }
+
+            let subscription = CKRecordZoneSubscription(
+                zoneID: Self.cloudRecordZoneID,
+                subscriptionID: Self.cloudRecordZoneSubscriptionID
+            )
+            let notificationInfo = CKSubscription.NotificationInfo()
+            notificationInfo.shouldSendContentAvailable = true
+            subscription.notificationInfo = notificationInfo
+
+            _ = try await saveCloudSubscription(subscription)
+            logger.info("ensureCloudRemoteChangeSubscription registered")
+        } catch {
+            logger.error("ensureCloudRemoteChangeSubscription failed error=\(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func fetchCloudSubscription(id: String) async throws -> CKSubscription? {
+        try await withCheckedThrowingContinuation { continuation in
+            privateDatabase.fetch(withSubscriptionID: id) { subscription, error in
+                if let ckError = error as? CKError, ckError.code == .unknownItem {
+                    continuation.resume(returning: nil)
+                } else if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: subscription)
+                }
+            }
+        }
+    }
+
+    private func saveCloudSubscription(_ subscription: CKSubscription) async throws -> CKSubscription {
+        try await withCheckedThrowingContinuation { continuation in
+            privateDatabase.save(subscription) { savedSubscription, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let savedSubscription {
+                    continuation.resume(returning: savedSubscription)
+                } else {
+                    continuation.resume(throwing: CocoaError(.coderInvalidValue))
+                }
+            }
+        }
     }
 
     private func fetchAllCloudRecords() async throws -> [CKRecord] {

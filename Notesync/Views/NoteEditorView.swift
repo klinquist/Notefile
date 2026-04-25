@@ -3,6 +3,110 @@ import SwiftUI
 import UIKit
 #elseif os(macOS)
 import AppKit
+import CoreServices
+#endif
+
+#if os(macOS)
+private final class NoteFileEventStreamBox: @unchecked Sendable {
+    private var stream: FSEventStreamRef?
+
+    init(_ stream: FSEventStreamRef) {
+        self.stream = stream
+    }
+
+    deinit {
+        stop()
+    }
+
+    func stop() {
+        guard let stream else { return }
+        FSEventStreamStop(stream)
+        FSEventStreamInvalidate(stream)
+        FSEventStreamRelease(stream)
+        self.stream = nil
+    }
+}
+
+@MainActor
+private final class NoteFileChangeMonitor {
+    private let onChange: () -> Void
+    private let queue = DispatchQueue(label: "com.linquist.notesync.noteFileEvents")
+    private var streamBox: NoteFileEventStreamBox?
+    private var scheduledChangeTask: Task<Void, Never>?
+
+    init(url: URL, onChange: @escaping () -> Void) {
+        self.onChange = onChange
+        startWatching(url)
+    }
+
+    deinit {
+        scheduledChangeTask?.cancel()
+        streamBox?.stop()
+    }
+
+    func stop() {
+        scheduledChangeTask?.cancel()
+        scheduledChangeTask = nil
+        streamBox?.stop()
+        streamBox = nil
+    }
+
+    private func startWatching(_ url: URL) {
+        var context = FSEventStreamContext(
+            version: 0,
+            info: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()),
+            retain: nil,
+            release: nil,
+            copyDescription: nil
+        )
+
+        let callback: FSEventStreamCallback = { _, callbackInfo, eventCount, eventPaths, eventFlags, _ in
+            guard let callbackInfo else { return }
+            let monitor = Unmanaged<NoteFileChangeMonitor>.fromOpaque(callbackInfo).takeUnretainedValue()
+            let paths = unsafeBitCast(eventPaths, to: NSArray.self) as? [String] ?? []
+            let flags = Array(UnsafeBufferPointer(start: eventFlags, count: eventCount))
+
+            Task { @MainActor in
+                monitor.handleFileEvents(paths: paths, flags: flags)
+            }
+        }
+
+        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes)
+        guard let stream = FSEventStreamCreate(
+            kCFAllocatorDefault,
+            callback,
+            &context,
+            [url.path] as CFArray,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+            0.25,
+            flags
+        ) else {
+            return
+        }
+
+        FSEventStreamSetDispatchQueue(stream, queue)
+        if FSEventStreamStart(stream) {
+            streamBox = NoteFileEventStreamBox(stream)
+        } else {
+            NoteFileEventStreamBox(stream).stop()
+        }
+    }
+
+    private func handleFileEvents(paths: [String], flags: [FSEventStreamEventFlags]) {
+        guard !paths.isEmpty else { return }
+        let ignoredFlags = FSEventStreamEventFlags(kFSEventStreamEventFlagEventIdsWrapped)
+        guard flags.contains(where: { $0 & ignoredFlags == 0 }) else { return }
+
+        scheduledChangeTask?.cancel()
+        scheduledChangeTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                self?.onChange()
+            }
+        }
+    }
+}
 #endif
 
 struct NoteEditorView: View {
@@ -20,8 +124,9 @@ struct NoteEditorView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var focusTask: Task<Void, Never>?
     @State private var pendingDeletedEntryIDs: Set<UUID> = []
-#if !os(iOS)
-    @State private var refreshTask: Task<Void, Never>?
+    @State private var hasPendingSave = false
+#if os(macOS)
+    @State private var noteFileChangeMonitor: NoteFileChangeMonitor?
 #endif
     @State private var lastSavedDraft: NoteDocument?
     @State private var lastDiskModifiedAt: Date = .distantPast
@@ -61,13 +166,15 @@ struct NoteEditorView: View {
         .task(id: notePath) {
             hasAppliedInitialFocus = false
             await loadNote()
+            startFileChangeMonitor()
         }
         .onDisappear {
             focusTask?.cancel()
-#if !os(iOS)
-            refreshTask?.cancel()
+#if os(macOS)
+            noteFileChangeMonitor?.stop()
+            noteFileChangeMonitor = nil
 #endif
-            queueSave(immediate: true)
+            savePendingChanges()
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
@@ -75,17 +182,14 @@ struct NoteEditorView: View {
                 Task {
                     await refreshFromDiskIfNeeded(force: true)
                 }
+            case .inactive:
+                savePendingChanges()
             case .background:
-                queueSave(immediate: true)
+                savePendingChanges()
             default:
                 break
             }
         }
-#if !os(iOS)
-        .task(id: notePath) {
-            startRefreshLoop()
-        }
-#endif
         .confirmationDialog(
             "Delete Entry?",
             isPresented: Binding(
@@ -204,7 +308,7 @@ struct NoteEditorView: View {
               draft?.entries.indices.contains(index) == true else { return }
         pendingDeletedEntryIDs.insert(entry.id)
         draft?.entries.remove(at: index)
-        queueSave(immediate: true)
+        markPendingSave()
     }
 
     private func confirmPendingEntryDeletion() {
@@ -236,18 +340,20 @@ struct NoteEditorView: View {
 #if !os(iOS)
         focusedMacEntryID = newEntry.id
 #endif
-        queueSave()
+        markPendingSave()
     }
 
-    private func queueSave(immediate: Bool = false) {
+    private func markPendingSave() {
+        hasPendingSave = true
+    }
+
+    private func savePendingChanges() {
+        guard hasPendingSave || !pendingDeletedEntryIDs.isEmpty else { return }
         saveTask?.cancel()
         guard let snapshot = draft else { return }
         let deletedEntryIDs = pendingDeletedEntryIDs
 
         saveTask = Task {
-            if !immediate {
-                try? await Task.sleep(for: .milliseconds(350))
-            }
             guard !Task.isCancelled else { return }
 
             do {
@@ -256,6 +362,7 @@ struct NoteEditorView: View {
                     originalRelativePath: notePath,
                     deletedEntryIDs: deletedEntryIDs
                 )
+                await repository.waitForPendingCloudSync()
                 await MainActor.run {
                     if saved != snapshot {
                         draft = saved
@@ -263,6 +370,11 @@ struct NoteEditorView: View {
                     lastSavedDraft = saved
                     lastDiskModifiedAt = (try? repository.noteModificationDate(relativePath: saved.relativePath)) ?? lastDiskModifiedAt
                     pendingDeletedEntryIDs.subtract(deletedEntryIDs)
+                    if draft == saved {
+                        hasPendingSave = false
+                    } else {
+                        hasPendingSave = true
+                    }
                     if saved.relativePath != notePath {
                         onPathChange(saved.relativePath)
                     }
@@ -275,19 +387,13 @@ struct NoteEditorView: View {
         }
     }
 
-    private func startRefreshLoop() {
-#if !os(iOS)
-        refreshTask?.cancel()
-        refreshTask = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled else { return }
-                let isActive = await MainActor.run {
-                    scenePhase == .active
-                }
-                if isActive {
-                    await refreshFromDiskIfNeeded()
-                }
+    private func startFileChangeMonitor() {
+#if os(macOS)
+        noteFileChangeMonitor?.stop()
+        guard let watchURL = try? repository.noteStorageURLForWatching(relativePath: notePath) else { return }
+        noteFileChangeMonitor = NoteFileChangeMonitor(url: watchURL) {
+            Task {
+                await refreshFromDiskIfNeeded()
             }
         }
 #endif
@@ -352,7 +458,7 @@ struct NoteEditorView: View {
             set: { newValue in
                 guard draft?.entries.indices.contains(index) == true else { return }
                 draft?.entries[index].text = newValue
-                queueSave()
+                markPendingSave()
             }
         )
     }
@@ -364,7 +470,7 @@ struct NoteEditorView: View {
                     get: { draft?.title ?? "" },
                     set: { newValue in
                         draft?.title = newValue
-                        queueSave()
+                        markPendingSave()
                     }
                 ))
                 .textFieldStyle(.plain)

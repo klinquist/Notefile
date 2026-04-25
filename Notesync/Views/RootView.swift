@@ -468,6 +468,11 @@ struct RootView: View {
         .task {
             await repository.loadBrowser()
         }
+#if os(macOS)
+        .task(id: scenePhase) {
+            await runActiveCloudRefreshLoop()
+        }
+#endif
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
             scheduleBrowserRefresh()
@@ -773,6 +778,18 @@ struct RootView: View {
             await repository.loadBrowser()
         }
     }
+
+#if os(macOS)
+    private func runActiveCloudRefreshLoop() async {
+        guard scenePhase == .active else { return }
+
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled, scenePhase == .active else { return }
+            await repository.loadBrowser()
+        }
+    }
+#endif
 }
 
 private struct BrowserGridScreen: View {
