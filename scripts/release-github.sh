@@ -34,10 +34,20 @@ TAG="v$VERSION"
 
 export SIGN_FOR_DISTRIBUTION="${SIGN_FOR_DISTRIBUTION:-1}"
 export NOTARIZE_DMG="${NOTARIZE_DMG:-1}"
+export ALLOW_PROVISIONING_UPDATES="${ALLOW_PROVISIONING_UPDATES:-1}"
+export NOTARYTOOL_KEYCHAIN_PROFILE="${NOTARYTOOL_KEYCHAIN_PROFILE:-notesync}"
 
 if [[ "$NOTARIZE_DMG" == "1" && -z "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]]; then
   echo "release-github.sh expects NOTARYTOOL_KEYCHAIN_PROFILE in the environment for notarized releases." >&2
   exit 1
+fi
+
+if [[ "$NOTARIZE_DMG" == "1" ]]; then
+  if ! xcrun notarytool history --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE" >/dev/null 2>&1; then
+    echo "Could not use notarytool keychain profile '$NOTARYTOOL_KEYCHAIN_PROFILE'." >&2
+    echo "Store credentials with: xcrun notarytool store-credentials $NOTARYTOOL_KEYCHAIN_PROFILE --key <path> --key-id <key-id> --validate" >&2
+    exit 1
+  fi
 fi
 
 "$ROOT_DIR/scripts/build-macos-dmg.sh" "$VERSION"

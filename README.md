@@ -100,21 +100,23 @@ To build a signed and notarized DMG:
 ```sh
 SIGN_FOR_DISTRIBUTION=1 \
 NOTARIZE_DMG=1 \
-NOTARYTOOL_KEYCHAIN_PROFILE=notesync-notary \
+ALLOW_PROVISIONING_UPDATES=1 \
+NOTARYTOOL_KEYCHAIN_PROFILE=notesync \
 ./scripts/build-macos-dmg.sh
 ```
 
 Store notarization credentials in your keychain once with:
 
 ```sh
-xcrun notarytool store-credentials notesync-notary \
-  --apple-id "<apple-id>" \
-  --team-id "<team-id>"
+xcrun notarytool store-credentials notesync \
+  --key "<path-to-api-key.p8>" \
+  --key-id "<key-id>" \
+  --validate
 ```
 
 Release notes:
 
 - `build-macos-dmg.sh` uses the project’s configured Developer Team by default
 - `release-github.sh` requires a clean git working tree
-- `release-github.sh` defaults to signed and notarized release builds
+- `release-github.sh` defaults to signed and notarized release builds with the `notesync` notarytool profile
 - `release-github.sh` uses the `gh` CLI to create or update the GitHub release
