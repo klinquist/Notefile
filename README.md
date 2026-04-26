@@ -12,6 +12,10 @@
   </tr>
 </table>
 
+## Demo
+
+[![Notesync.md demo video](https://img.youtube.com/vi/62TmqrJ-7AU/maxresdefault.jpg)](https://www.youtube.com/watch?v=62TmqrJ-7AU)
+
 ## Features
 
 - Organize notes into folders with emoji and accent colors
