@@ -335,17 +335,8 @@ struct NotesyncSettingsView: View {
             Text(localMirrorSyncService.statusText)
                 .foregroundStyle(.secondary)
 
-            HStack {
-                Button("Choose Folder") {
-                    localMirrorSyncService.chooseFolder()
-                }
-
-                Button("Sync Now") {
-                    Task {
-                        await localMirrorSyncService.syncNow()
-                    }
-                }
-                .disabled(localMirrorSyncService.mirroredFolderURL == nil)
+            Button("Choose Folder") {
+                localMirrorSyncService.chooseFolder()
             }
         }
     }

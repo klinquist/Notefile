@@ -87,6 +87,8 @@ final class NoteRepository: ObservableObject {
     }
 
     func loadBrowser() async {
+        let previousBrowserItems = browserItems
+
         do {
             try await refreshCloudCache()
         } catch {
@@ -99,6 +101,9 @@ final class NoteRepository: ObservableObject {
             let rootURL = try storageRootURL()
             lastErrorMessage = nil
             logger.info("loadBrowser completed root=\(rootURL.path, privacy: .public) items=\(self.browserItems.count)")
+            if browserItems != previousBrowserItems {
+                notifyLocalMirrorSyncNeeded("loadBrowserChanged")
+            }
         } catch {
             browserItems = []
             lastErrorMessage = error.localizedDescription
@@ -505,9 +510,6 @@ final class NoteRepository: ObservableObject {
             try? await Task.sleep(for: .milliseconds(750))
             guard !Task.isCancelled else { return }
             await self?.loadBrowser()
-            await MainActor.run {
-                self?.notifyLocalMirrorSyncNeeded("cloudRemoteChange")
-            }
         }
     }
 
