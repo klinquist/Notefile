@@ -244,13 +244,7 @@ final class LocalMirrorSyncService: ObservableObject {
                         try createDirectoryIfNeeded(relativePath, under: mirroredFolderURL)
                     }
                 } else if currentLocalSnapshot.directories.contains(relativePath) {
-                    if survivingDirectoryMatchesPreviousLocal(relativePath: relativePath, snapshot: currentLocalSnapshot, previousDirectoryStates: previousDirectoryStates) {
-                        logger.notice("syncNow deleteLocalDirectory relativePath=\(relativePath, privacy: .public)")
-                        try removeItemIfExists(at: mirroredFolderURL.appendingPathComponent(relativePath, isDirectory: true))
-                    } else {
-                        logger.info("syncNow restoreCloudDirectoryFromChangedLocal relativePath=\(relativePath, privacy: .public)")
-                        try createDirectoryIfNeeded(relativePath, under: cloudRoot)
-                    }
+                    logger.info("syncNow preserveLocalDirectoryMissingCloud relativePath=\(relativePath, privacy: .public)")
                 }
             }
 
@@ -676,18 +670,6 @@ final class LocalMirrorSyncService: ObservableObject {
         previousDirectoryStates: [String: SyncDirectoryState]
     ) -> Bool {
         guard let previousIdentifier = previousDirectoryStates[relativePath]?.cloudIdentifier,
-              let currentIdentifier = snapshot.directoryIdentifiers[relativePath] else {
-            return false
-        }
-        return previousIdentifier == currentIdentifier
-    }
-
-    private func survivingDirectoryMatchesPreviousLocal(
-        relativePath: String,
-        snapshot: MirrorSnapshot,
-        previousDirectoryStates: [String: SyncDirectoryState]
-    ) -> Bool {
-        guard let previousIdentifier = previousDirectoryStates[relativePath]?.localIdentifier,
               let currentIdentifier = snapshot.directoryIdentifiers[relativePath] else {
             return false
         }
