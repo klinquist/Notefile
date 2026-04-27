@@ -244,7 +244,8 @@ final class LocalMirrorSyncService: ObservableObject {
                         try createDirectoryIfNeeded(relativePath, under: mirroredFolderURL)
                     }
                 } else if currentLocalSnapshot.directories.contains(relativePath) {
-                    logger.info("syncNow preserveLocalDirectoryMissingCloud relativePath=\(relativePath, privacy: .public)")
+                    logger.info("syncNow createCloudDirectoryFromPreservedLocal relativePath=\(relativePath, privacy: .public)")
+                    try createDirectoryIfNeeded(relativePath, under: cloudRoot)
                 }
             }
 
@@ -350,7 +351,8 @@ final class LocalMirrorSyncService: ObservableObject {
         guard mirroredFolderURL != nil else { return }
 
         if isSyncing {
-            logger.debug("handleMirrorFileEvents ignoredWhileSyncing count=\(paths.count)")
+            needsFollowUpSync = true
+            logger.debug("handleMirrorFileEvents deferredWhileSyncing count=\(paths.count)")
             return
         }
 
