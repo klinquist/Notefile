@@ -112,6 +112,7 @@ final class LocalMirrorSyncService: ObservableObject {
             let previousFiles = previousManifest?.files ?? []
             let previousFileStates = previousManifest?.fileStates ?? [:]
             let previousDirectories = previousManifest?.directories ?? []
+            let previousDirectoryStates = previousManifest?.directoryStates ?? [:]
 
             var currentCloudSnapshot = try cloudSnapshot(at: cloudRoot, repository: repository)
             var currentLocalSnapshot = try localSnapshot(at: mirroredFolderURL)
@@ -235,11 +236,21 @@ final class LocalMirrorSyncService: ObservableObject {
 
             for relativePath in directoriesToDelete {
                 if currentCloudSnapshot.directories.contains(relativePath) {
-                    logger.notice("syncNow deleteCloudDirectory relativePath=\(relativePath, privacy: .public)")
-                    try removeItemIfExists(at: cloudRoot.appendingPathComponent(relativePath, isDirectory: true))
+                    if survivingDirectoryMatchesPreviousCloud(relativePath: relativePath, snapshot: currentCloudSnapshot, previousDirectoryStates: previousDirectoryStates) {
+                        logger.notice("syncNow deleteCloudDirectory relativePath=\(relativePath, privacy: .public)")
+                        try removeItemIfExists(at: cloudRoot.appendingPathComponent(relativePath, isDirectory: true))
+                    } else {
+                        logger.info("syncNow restoreLocalDirectoryFromChangedCloud relativePath=\(relativePath, privacy: .public)")
+                        try createDirectoryIfNeeded(relativePath, under: mirroredFolderURL)
+                    }
                 } else if currentLocalSnapshot.directories.contains(relativePath) {
-                    logger.notice("syncNow deleteLocalDirectory relativePath=\(relativePath, privacy: .public)")
-                    try removeItemIfExists(at: mirroredFolderURL.appendingPathComponent(relativePath, isDirectory: true))
+                    if survivingDirectoryMatchesPreviousLocal(relativePath: relativePath, snapshot: currentLocalSnapshot, previousDirectoryStates: previousDirectoryStates) {
+                        logger.notice("syncNow deleteLocalDirectory relativePath=\(relativePath, privacy: .public)")
+                        try removeItemIfExists(at: mirroredFolderURL.appendingPathComponent(relativePath, isDirectory: true))
+                    } else {
+                        logger.info("syncNow restoreCloudDirectoryFromChangedLocal relativePath=\(relativePath, privacy: .public)")
+                        try createDirectoryIfNeeded(relativePath, under: cloudRoot)
+                    }
                 }
             }
 
@@ -250,7 +261,8 @@ final class LocalMirrorSyncService: ObservableObject {
                     mirroredFolderPath: mirroredFolderURL.path,
                     files: Set(finalCloudSnapshot.files.keys).union(finalLocalSnapshot.files.keys),
                     fileStates: syncFileStates(cloudSnapshot: finalCloudSnapshot, localSnapshot: finalLocalSnapshot),
-                    directories: Set(finalCloudSnapshot.directories).union(finalLocalSnapshot.directories)
+                    directories: Set(finalCloudSnapshot.directories).union(finalLocalSnapshot.directories),
+                    directoryStates: syncDirectoryStates(cloudSnapshot: finalCloudSnapshot, localSnapshot: finalLocalSnapshot)
                 )
             )
 
@@ -402,7 +414,8 @@ final class LocalMirrorSyncService: ObservableObject {
                 mirroredFolderPath: manifest.mirroredFolderPath,
                 files: filteredFiles,
                 fileStates: manifest.fileStates.filter { isValidMirrorRelativePath($0.key) },
-                directories: filteredDirectories
+                directories: filteredDirectories,
+                directoryStates: manifest.directoryStates.filter { isValidMirrorRelativePath($0.key) }
             )
             saveSyncManifest(cleanedManifest)
             logger.warning("loadSyncManifest removed stale absolute paths files=\(manifest.files.count - filteredFiles.count) directories=\(manifest.directories.count - filteredDirectories.count)")
@@ -427,7 +440,7 @@ final class LocalMirrorSyncService: ObservableObject {
             includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
             options: []
         ) else {
-            return MirrorSnapshot(files: [:], directories: [])
+            return MirrorSnapshot(files: [:], directories: [], directoryIdentifiers: [:])
         }
 
         for case let fileURL as URL in enumerator {
@@ -450,7 +463,8 @@ final class LocalMirrorSyncService: ObservableObject {
                         kind: .note,
                         url: fileURL,
                         modifiedAt: try repository.noteModificationDate(relativePath: noteRelativePath),
-                        fingerprint: stringFingerprint(try repository.exportCombinedMarkdown(relativePath: noteRelativePath))
+                        fingerprint: stringFingerprint(try repository.exportCombinedMarkdown(relativePath: noteRelativePath)),
+                        identifier: itemIdentifier(at: fileURL)
                     )
                     enumerator.skipDescendants()
                     continue
@@ -470,19 +484,21 @@ final class LocalMirrorSyncService: ObservableObject {
                     kind: .folderMetadata,
                     url: fileURL,
                     modifiedAt: values.contentModificationDate ?? .distantPast,
-                    fingerprint: try fileFingerprint(at: fileURL)
+                    fingerprint: try fileFingerprint(at: fileURL),
+                    identifier: itemIdentifier(at: fileURL)
                 )
             } else if fileURL.pathExtension.lowercased() == "md" {
                 files[relativePath] = MirrorFileRecord(
                     kind: .note,
                     url: fileURL,
                     modifiedAt: try repository.noteModificationDate(relativePath: relativePath),
-                    fingerprint: stringFingerprint(try repository.exportCombinedMarkdown(relativePath: relativePath))
+                    fingerprint: stringFingerprint(try repository.exportCombinedMarkdown(relativePath: relativePath)),
+                    identifier: itemIdentifier(at: fileURL)
                 )
             }
         }
 
-        return MirrorSnapshot(files: files, directories: directories)
+        return MirrorSnapshot(files: files, directories: directories, directoryIdentifiers: directoryIdentifiers(in: directories, under: rootURL))
     }
 
     private func localSnapshot(at rootURL: URL) throws -> MirrorSnapshot {
@@ -495,7 +511,7 @@ final class LocalMirrorSyncService: ObservableObject {
             includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
             options: []
         ) else {
-            return MirrorSnapshot(files: [:], directories: [])
+            return MirrorSnapshot(files: [:], directories: [], directoryIdentifiers: [:])
         }
 
         for case let fileURL as URL in enumerator {
@@ -525,19 +541,21 @@ final class LocalMirrorSyncService: ObservableObject {
                     kind: .folderMetadata,
                     url: fileURL,
                     modifiedAt: values.contentModificationDate ?? .distantPast,
-                    fingerprint: try fileFingerprint(at: fileURL)
+                    fingerprint: try fileFingerprint(at: fileURL),
+                    identifier: itemIdentifier(at: fileURL)
                 )
             } else if fileURL.pathExtension.lowercased() == "md" {
                 files[relativePath] = MirrorFileRecord(
                     kind: .note,
                     url: fileURL,
                     modifiedAt: values.contentModificationDate ?? .distantPast,
-                    fingerprint: try fileFingerprint(at: fileURL)
+                    fingerprint: try fileFingerprint(at: fileURL),
+                    identifier: itemIdentifier(at: fileURL)
                 )
             }
         }
 
-        return MirrorSnapshot(files: files, directories: directories)
+        return MirrorSnapshot(files: files, directories: directories, directoryIdentifiers: directoryIdentifiers(in: directories, under: rootURL))
     }
 
     private func copyCloudFileToLocal(
@@ -629,10 +647,13 @@ final class LocalMirrorSyncService: ObservableObject {
         file: MirrorFileRecord,
         previousFileStates: [String: SyncFileState]
     ) -> Bool {
-        guard let previousFingerprint = previousFileStates[relativePath]?.cloudFingerprint else {
+        guard let previousState = previousFileStates[relativePath],
+              let previousFingerprint = previousState.cloudFingerprint,
+              let previousIdentifier = previousState.cloudIdentifier,
+              let currentIdentifier = file.identifier else {
             return false
         }
-        return previousFingerprint == file.fingerprint
+        return previousFingerprint == file.fingerprint && previousIdentifier == currentIdentifier
     }
 
     private func survivingFileMatchesPreviousLocal(
@@ -640,10 +661,37 @@ final class LocalMirrorSyncService: ObservableObject {
         file: MirrorFileRecord,
         previousFileStates: [String: SyncFileState]
     ) -> Bool {
-        guard let previousFingerprint = previousFileStates[relativePath]?.localFingerprint else {
+        guard let previousState = previousFileStates[relativePath],
+              let previousFingerprint = previousState.localFingerprint,
+              let previousIdentifier = previousState.localIdentifier,
+              let currentIdentifier = file.identifier else {
             return false
         }
-        return previousFingerprint == file.fingerprint
+        return previousFingerprint == file.fingerprint && previousIdentifier == currentIdentifier
+    }
+
+    private func survivingDirectoryMatchesPreviousCloud(
+        relativePath: String,
+        snapshot: MirrorSnapshot,
+        previousDirectoryStates: [String: SyncDirectoryState]
+    ) -> Bool {
+        guard let previousIdentifier = previousDirectoryStates[relativePath]?.cloudIdentifier,
+              let currentIdentifier = snapshot.directoryIdentifiers[relativePath] else {
+            return false
+        }
+        return previousIdentifier == currentIdentifier
+    }
+
+    private func survivingDirectoryMatchesPreviousLocal(
+        relativePath: String,
+        snapshot: MirrorSnapshot,
+        previousDirectoryStates: [String: SyncDirectoryState]
+    ) -> Bool {
+        guard let previousIdentifier = previousDirectoryStates[relativePath]?.localIdentifier,
+              let currentIdentifier = snapshot.directoryIdentifiers[relativePath] else {
+            return false
+        }
+        return previousIdentifier == currentIdentifier
     }
 
     private func syncFileStates(cloudSnapshot: MirrorSnapshot, localSnapshot: MirrorSnapshot) -> [String: SyncFileState] {
@@ -653,7 +701,22 @@ final class LocalMirrorSyncService: ObservableObject {
                 relativePath,
                 SyncFileState(
                     cloudFingerprint: cloudSnapshot.files[relativePath]?.fingerprint,
-                    localFingerprint: localSnapshot.files[relativePath]?.fingerprint
+                    cloudIdentifier: cloudSnapshot.files[relativePath]?.identifier,
+                    localFingerprint: localSnapshot.files[relativePath]?.fingerprint,
+                    localIdentifier: localSnapshot.files[relativePath]?.identifier
+                )
+            )
+        })
+    }
+
+    private func syncDirectoryStates(cloudSnapshot: MirrorSnapshot, localSnapshot: MirrorSnapshot) -> [String: SyncDirectoryState] {
+        let allDirectories = Set(cloudSnapshot.directories).union(localSnapshot.directories)
+        return Dictionary(uniqueKeysWithValues: allDirectories.map { relativePath in
+            (
+                relativePath,
+                SyncDirectoryState(
+                    cloudIdentifier: cloudSnapshot.directoryIdentifiers[relativePath],
+                    localIdentifier: localSnapshot.directoryIdentifiers[relativePath]
                 )
             )
         })
@@ -671,6 +734,23 @@ final class LocalMirrorSyncService: ObservableObject {
         SHA256.hash(data: data)
             .map { String(format: "%02x", $0) }
             .joined()
+    }
+
+    private func directoryIdentifiers(in directories: Set<String>, under rootURL: URL) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: directories.compactMap { relativePath in
+            let url = rootURL.appendingPathComponent(relativePath, isDirectory: true)
+            guard let identifier = itemIdentifier(at: url) else { return nil }
+            return (relativePath, identifier)
+        })
+    }
+
+    private func itemIdentifier(at url: URL) -> String? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let systemNumber = attributes[.systemNumber],
+              let fileNumber = attributes[.systemFileNumber] else {
+            return nil
+        }
+        return "\(systemNumber):\(fileNumber)"
     }
 
     private func removeItemIfExists(at url: URL) throws {
@@ -725,6 +805,7 @@ final class LocalMirrorSyncService: ObservableObject {
 private struct MirrorSnapshot {
     let files: [String: MirrorFileRecord]
     let directories: Set<String>
+    let directoryIdentifiers: [String: String]
 }
 
 private struct MirrorFileRecord {
@@ -732,6 +813,7 @@ private struct MirrorFileRecord {
     let url: URL
     let modifiedAt: Date
     let fingerprint: String
+    let identifier: String?
 }
 
 private enum MirrorFileKind: String, Codable {
@@ -744,12 +826,20 @@ private struct SyncManifest: Codable {
     let files: Set<String>
     let fileStates: [String: SyncFileState]
     let directories: Set<String>
+    let directoryStates: [String: SyncDirectoryState]
 
-    init(mirroredFolderPath: String, files: Set<String>, fileStates: [String: SyncFileState] = [:], directories: Set<String>) {
+    init(
+        mirroredFolderPath: String,
+        files: Set<String>,
+        fileStates: [String: SyncFileState] = [:],
+        directories: Set<String>,
+        directoryStates: [String: SyncDirectoryState] = [:]
+    ) {
         self.mirroredFolderPath = mirroredFolderPath
         self.files = files
         self.fileStates = fileStates
         self.directories = directories
+        self.directoryStates = directoryStates
     }
 
     init(from decoder: Decoder) throws {
@@ -758,11 +848,19 @@ private struct SyncManifest: Codable {
         files = try container.decode(Set<String>.self, forKey: .files)
         fileStates = try container.decodeIfPresent([String: SyncFileState].self, forKey: .fileStates) ?? [:]
         directories = try container.decode(Set<String>.self, forKey: .directories)
+        directoryStates = try container.decodeIfPresent([String: SyncDirectoryState].self, forKey: .directoryStates) ?? [:]
     }
 }
 
 private struct SyncFileState: Codable {
     let cloudFingerprint: String?
+    let cloudIdentifier: String?
     let localFingerprint: String?
+    let localIdentifier: String?
+}
+
+private struct SyncDirectoryState: Codable {
+    let cloudIdentifier: String?
+    let localIdentifier: String?
 }
 #endif
