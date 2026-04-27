@@ -330,6 +330,27 @@ final class NoteRepository: ObservableObject {
         )
     }
 
+    func importFolder(relativePath: String, sourceModifiedAt: Date? = nil) async throws {
+        let folderURL = try folderURL(for: relativePath)
+        try fileManager.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        let metadata = loadFolderMetadata(at: folderURL) ?? .default
+        let modifiedAt = sourceModifiedAt
+            ?? (try? folderURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+            ?? Date()
+
+        if loadFolderMetadata(at: folderURL) == nil {
+            try saveFolderMetadata(metadata, at: folderURL)
+        }
+
+        queueCloudSync("importFolder") { repository in
+            try await repository.uploadFolder(relativePath: relativePath, metadata: metadata, modifiedAt: modifiedAt)
+        }
+    }
+
+    func reloadBrowserFromLocalCache() throws {
+        try reloadLocalBrowser()
+    }
+
     func prepareNoteForEditing(relativePath: String) async throws -> NoteDocument {
         try await refreshCloudNote(relativePath: relativePath)
         var note = try loadNote(relativePath: relativePath)
@@ -1218,7 +1239,10 @@ final class NoteRepository: ObservableObject {
 
         try pruneCloudCache(
             rootURL: rootURL,
-            validFolderPaths: Set(folders.map(\.relativePath)),
+            validFolderPaths: validCloudFolderPaths(
+                explicitFolderPaths: Set(folders.map(\.relativePath)),
+                notePaths: refreshedNotePaths
+            ),
             validNotePaths: refreshedNotePaths
         )
 
@@ -1307,6 +1331,20 @@ final class NoteRepository: ObservableObject {
                 try fileManager.removeItem(at: url)
             }
         }
+    }
+
+    private func validCloudFolderPaths(explicitFolderPaths: Set<String>, notePaths: Set<String>) -> Set<String> {
+        var folderPaths = explicitFolderPaths
+
+        for path in explicitFolderPaths.union(notePaths) {
+            var nextParent = parentPath(for: path)
+            while let parent = nextParent {
+                folderPaths.insert(parent)
+                nextParent = parentPath(for: parent)
+            }
+        }
+
+        return folderPaths
     }
 
     private func uploadFolderTree(at folderURL: URL) async throws {

@@ -38,6 +38,7 @@ final class LocalMirrorSyncService: ObservableObject {
     private let syncManifestKey = "LocalMirrorSyncManifest"
     private weak var repository: NoteRepository?
     private var scheduledSyncTask: Task<Void, Never>?
+    private var periodicSyncTask: Task<Void, Never>?
     private var fileEventStream: FileEventStreamBox?
     private var isSyncing = false
     private var needsFollowUpSync = false
@@ -51,11 +52,13 @@ final class LocalMirrorSyncService: ObservableObject {
         }
         restoreBookmark()
         startWatchingMirrorFolder()
+        startPeriodicSync()
         scheduleSync(reason: "startup", debounce: .milliseconds(500))
     }
 
     deinit {
         scheduledSyncTask?.cancel()
+        periodicSyncTask?.cancel()
     }
 
     func chooseFolder() {
@@ -71,6 +74,7 @@ final class LocalMirrorSyncService: ObservableObject {
             mirroredFolderURL = url
             statusText = "Mirroring with \(url.path)"
             startWatchingMirrorFolder()
+            startPeriodicSync()
             scheduleSync(reason: "chooseFolder", debounce: .milliseconds(100))
         }
     }
@@ -230,7 +234,7 @@ final class LocalMirrorSyncService: ObservableObject {
                     try createDirectoryIfNeeded(relativePath, under: mirroredFolderURL)
                 } else if currentLocalSnapshot.directories.contains(relativePath) {
                     logger.info("syncNow createCloudDirectory relativePath=\(relativePath, privacy: .public)")
-                    try createDirectoryIfNeeded(relativePath, under: cloudRoot)
+                    try await repository.importFolder(relativePath: relativePath)
                 }
             }
 
@@ -245,7 +249,7 @@ final class LocalMirrorSyncService: ObservableObject {
                     }
                 } else if currentLocalSnapshot.directories.contains(relativePath) {
                     logger.info("syncNow createCloudDirectoryFromPreservedLocal relativePath=\(relativePath, privacy: .public)")
-                    try createDirectoryIfNeeded(relativePath, under: cloudRoot)
+                    try await repository.importFolder(relativePath: relativePath)
                 }
             }
 
@@ -263,7 +267,7 @@ final class LocalMirrorSyncService: ObservableObject {
 
             statusText = "Last sync: \(MarkdownNoteCodec.displayDateFormatter.string(from: Date()))"
             logger.info("syncNow completed finalCloudFiles=\(finalCloudSnapshot.files.count) finalLocalFiles=\(finalLocalSnapshot.files.count)")
-            await repository.loadBrowser()
+            try repository.reloadBrowserFromLocalCache()
         } catch {
             statusText = "Sync failed: \(error.localizedDescription)"
             logger.error("syncNow failed error=\(error.localizedDescription, privacy: .public)")
@@ -286,6 +290,19 @@ final class LocalMirrorSyncService: ObservableObject {
             await self?.syncNow()
         }
         logger.debug("scheduleSync reason=\(reason, privacy: .public)")
+    }
+
+    private func startPeriodicSync() {
+        periodicSyncTask?.cancel()
+        guard mirroredFolderURL != nil else { return }
+
+        periodicSyncTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                guard !Task.isCancelled else { return }
+                await self?.scheduleSync(reason: "periodicScan", debounce: .milliseconds(100))
+            }
+        }
     }
 
     private func startWatchingMirrorFolder() {
