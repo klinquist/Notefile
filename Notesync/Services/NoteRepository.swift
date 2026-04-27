@@ -53,6 +53,7 @@ final class NoteRepository: ObservableObject {
 
     @Published private(set) var browserItems: [BrowserItem] = []
     @Published private(set) var storageDescription = "Checking iCloud"
+    @Published private(set) var cloudCacheRevision = 0
     @Published var lastErrorMessage: String?
 
     var localMirrorSyncHandler: ((String) -> Void)?
@@ -88,9 +89,11 @@ final class NoteRepository: ObservableObject {
 
     func loadBrowser() async {
         let previousBrowserItems = browserItems
+        var didRefreshCloudCache = false
 
         do {
             try await refreshCloudCache()
+            didRefreshCloudCache = true
         } catch {
             lastErrorMessage = error.localizedDescription
             logger.error("loadBrowser cloud refresh failed error=\(error.localizedDescription, privacy: .public)")
@@ -100,6 +103,9 @@ final class NoteRepository: ObservableObject {
             try reloadLocalBrowser()
             let rootURL = try storageRootURL()
             lastErrorMessage = nil
+            if didRefreshCloudCache {
+                cloudCacheRevision &+= 1
+            }
             logger.info("loadBrowser completed root=\(rootURL.path, privacy: .public) items=\(self.browserItems.count)")
             if browserItems != previousBrowserItems {
                 notifyLocalMirrorSyncNeeded("loadBrowserChanged")
@@ -352,8 +358,19 @@ final class NoteRepository: ObservableObject {
     }
 
     func prepareNoteForEditing(relativePath: String) async throws -> NoteDocument {
-        try await refreshCloudNote(relativePath: relativePath)
-        var note = try loadNote(relativePath: relativePath)
+        let note: NoteDocument
+        do {
+            note = try loadNote(relativePath: relativePath)
+        } catch {
+            try await refreshCloudNote(relativePath: relativePath)
+            note = try loadNote(relativePath: relativePath)
+        }
+
+        return prepareCachedNoteForEditing(note, relativePath: relativePath)
+    }
+
+    private func prepareCachedNoteForEditing(_ cachedNote: NoteDocument, relativePath: String) -> NoteDocument {
+        var note = cachedNote
         if note.entries.last?.text.isEmpty != true {
             let thresholdMinutes = AppPreferences.currentNewEntryThresholdMinutes()
             if thresholdMinutes > 0,

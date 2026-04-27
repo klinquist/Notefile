@@ -162,6 +162,7 @@ struct NoteEditorView: View {
                 ContentUnavailableView("Could Not Open Note", systemImage: "exclamationmark.triangle", description: Text(loadError))
             } else {
                 ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
         }
         .task(id: notePath) {
@@ -189,6 +190,11 @@ struct NoteEditorView: View {
                 savePendingChanges()
             default:
                 break
+            }
+        }
+        .onChange(of: repository.cloudCacheRevision) { _, _ in
+            Task {
+                await refreshFromDiskIfNeeded(force: true)
             }
         }
         .confirmationDialog(
