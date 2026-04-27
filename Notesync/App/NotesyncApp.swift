@@ -46,7 +46,7 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
         setupMacMinimizeBehavior()
     }
 
-    func application(_ application: NSApplication, didReceiveRemoteNotification userInfo: [String: Any]) {
+    nonisolated func application(_ application: NSApplication, didReceiveRemoteNotification userInfo: [String: Any]) {
         let cloudKitUserInfo = Dictionary(uniqueKeysWithValues: userInfo.map { (AnyHashable($0.key), $0.value) })
         Self.postCloudKitChangeNotification(from: cloudKitUserInfo)
     }
@@ -209,7 +209,7 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
         menuBarRestoreWindow = nil
     }
 
-    private static func postCloudKitChangeNotification(from userInfo: [AnyHashable: Any]) {
+    nonisolated private static func postCloudKitChangeNotification(from userInfo: [AnyHashable: Any]) {
         guard let notification = CKNotification(fromRemoteNotificationDictionary: userInfo),
               notification.subscriptionID == NotesyncCloudKitSubscription.recordZoneSubscriptionID else {
             return
