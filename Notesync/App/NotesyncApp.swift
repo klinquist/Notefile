@@ -40,6 +40,7 @@ final class NotesyncAppDelegate: NSObject, UIApplicationDelegate {
 final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private weak var menuBarRestoreWindow: NSWindow?
+    private var appliedMacMinimizeBehavior: MacMinimizeBehavior?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.registerForRemoteNotifications()
@@ -80,6 +81,8 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
 
     private func applyMacMinimizeBehavior() {
         let behavior = currentMacMinimizeBehavior()
+        appliedMacMinimizeBehavior = behavior
+
         switch behavior {
         case .dock:
             leaveMenuBarMode()
@@ -146,6 +149,9 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func userDefaultsDidChange(_ notification: Notification) {
+        let behavior = currentMacMinimizeBehavior()
+        guard behavior != appliedMacMinimizeBehavior else { return }
+
         applyMacMinimizeBehavior()
     }
 
