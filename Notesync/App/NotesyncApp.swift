@@ -148,7 +148,13 @@ final class NotesyncAppDelegate: NSObject, NSApplicationDelegate {
         enterMenuBarMode()
     }
 
-    @objc private func userDefaultsDidChange(_ notification: Notification) {
+    @objc nonisolated private func userDefaultsDidChange(_ notification: Notification) {
+        Task { @MainActor [weak self] in
+            self?.handleUserDefaultsDidChange()
+        }
+    }
+
+    private func handleUserDefaultsDidChange() {
         let behavior = currentMacMinimizeBehavior()
         guard behavior != appliedMacMinimizeBehavior else { return }
 

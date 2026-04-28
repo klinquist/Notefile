@@ -642,7 +642,7 @@ struct NoteEditorView: View {
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 12) {
                 Text(MarkdownNoteCodec.displayDateFormatter.string(from: entry.timestamp))
-                    .font(isNewestEntry ? .headline.weight(.semibold) : .subheadline.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
