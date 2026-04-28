@@ -276,7 +276,7 @@
 				CODE_SIGN_ENTITLEMENTS = Notesync/Resources/NotesyncIOS.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Notesync/Resources/NotesyncMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = YYE9CDH9RT;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -308,7 +308,7 @@
 				CODE_SIGN_ENTITLEMENTS = Notesync/Resources/NotesyncIOS.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Notesync/Resources/NotesyncMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = YYE9CDH9RT;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;

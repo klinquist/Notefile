@@ -89,6 +89,8 @@ Or publish a specific version tag:
 ./scripts/release-github.sh 1.1
 ```
 
+For signed/notarized releases and App Store uploads, copy `scripts/release.local.env.example` to `scripts/release.local.env` and fill in your App Store Connect API key values. `scripts/release.local.env` is ignored by git and is loaded automatically by the release scripts.
+
 Local builds default to unsigned DMGs. To sign for distribution:
 
 ```sh
@@ -98,21 +100,24 @@ SIGN_FOR_DISTRIBUTION=1 ./scripts/build-macos-dmg.sh
 To build a signed and notarized DMG:
 
 ```sh
-SIGN_FOR_DISTRIBUTION=1 \
-NOTARIZE_DMG=1 \
-ALLOW_PROVISIONING_UPDATES=1 \
-NOTARYTOOL_KEYCHAIN_PROFILE=notesync \
-./scripts/build-macos-dmg.sh
+cp scripts/release.local.env.example scripts/release.local.env
+$EDITOR scripts/release.local.env
+SIGN_FOR_DISTRIBUTION=1 NOTARIZE_DMG=1 ALLOW_PROVISIONING_UPDATES=1 ./scripts/build-macos-dmg.sh
 ```
 
 To notarize an already-built DMG:
 
 ```sh
-NOTARYTOOL_KEYCHAIN_PROFILE=notesync \
 ./scripts/notarize-macos-dmg.sh dist/Notesync-1.6-macOS.dmg
 ```
 
 The notarization helper signs the DMG first by default. Set `SIGN_DMG=0` if you need to submit an already-signed DMG without replacing its signature.
+
+To upload iOS and macOS App Store Connect builds without relying on Xcode's account session:
+
+```sh
+./scripts/upload-app-store-builds.sh
+```
 
 If Developer ID signing fails with `errSecInternalComponent`, update the private key's partition list:
 
@@ -124,7 +129,7 @@ security set-key-partition-list \
   /Users/kris/Library/Keychains/login.keychain-db
 ```
 
-Store notarization credentials in your keychain once with:
+Keychain-based notarization is still supported if needed, but the App Store Connect API key path above is preferred because it does not depend on Xcode account login state. Store notarization credentials in your keychain with:
 
 ```sh
 xcrun notarytool store-credentials notesync \
@@ -138,5 +143,5 @@ Release notes:
 - `build-macos-dmg.sh` uses the project’s configured Developer Team by default
 - `DEVELOPER_ID_APPLICATION_IDENTITY` can be set to a specific Developer ID certificate name or hash
 - `release-github.sh` requires a clean git working tree
-- `release-github.sh` defaults to signed and notarized release builds with the `notesync` notarytool profile
+- `release-github.sh` defaults to signed and notarized release builds and expects App Store Connect API key variables
 - `release-github.sh` uses the `gh` CLI to create or update the GitHub release

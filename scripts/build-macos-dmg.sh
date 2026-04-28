@@ -3,6 +3,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LOCAL_RELEASE_ENV="$ROOT_DIR/scripts/release.local.env"
+
+if [[ -f "$LOCAL_RELEASE_ENV" ]]; then
+  source "$LOCAL_RELEASE_ENV"
+fi
+
 PROJECT_PATH="$ROOT_DIR/Notesync.xcodeproj"
 SCHEME="Notesync"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-$ROOT_DIR/.derived-release-macos}"
@@ -15,9 +21,23 @@ EXPORT_OPTIONS_PLIST="$BUILD_ROOT/export-options.plist"
 SIGN_FOR_DISTRIBUTION="${SIGN_FOR_DISTRIBUTION:-0}"
 NOTARIZE_DMG="${NOTARIZE_DMG:-0}"
 ALLOW_PROVISIONING_UPDATES="${ALLOW_PROVISIONING_UPDATES:-0}"
-NOTARYTOOL_KEYCHAIN_PROFILE="${NOTARYTOOL_KEYCHAIN_PROFILE:-notesync}"
+NOTARYTOOL_KEYCHAIN_PROFILE="${NOTARYTOOL_KEYCHAIN_PROFILE:-}"
 DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}"
 DEVELOPER_ID_APPLICATION_IDENTITY="${DEVELOPER_ID_APPLICATION_IDENTITY:-Developer ID Application}"
+
+xcodebuild_auth_args=()
+if [[ -n "${ASC_KEY_PATH:-}" || -n "${ASC_KEY_ID:-}" || -n "${ASC_ISSUER_ID:-}" ]]; then
+  if [[ -z "${ASC_KEY_PATH:-}" || -z "${ASC_KEY_ID:-}" || -z "${ASC_ISSUER_ID:-}" ]]; then
+    echo "ASC_KEY_PATH, ASC_KEY_ID, and ASC_ISSUER_ID must be set together." >&2
+    exit 1
+  fi
+
+  xcodebuild_auth_args=(
+    -authenticationKeyPath "$ASC_KEY_PATH"
+    -authenticationKeyID "$ASC_KEY_ID"
+    -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+  )
+fi
 
 if [[ "$NOTARIZE_DMG" == "1" ]]; then
   SIGN_FOR_DISTRIBUTION="1"
@@ -111,7 +131,7 @@ if [[ "$SIGN_FOR_DISTRIBUTION" == "1" ]]; then
   )
 
   if [[ "$ALLOW_PROVISIONING_UPDATES" == "1" ]]; then
-    archive_args=(-allowProvisioningUpdates "${archive_args[@]}")
+    archive_args=(-allowProvisioningUpdates "${xcodebuild_auth_args[@]}" "${archive_args[@]}")
   fi
 
   echo "Building signed macOS archive for version $VERSION"
@@ -159,7 +179,7 @@ EOF
   )
 
   if [[ "$ALLOW_PROVISIONING_UPDATES" == "1" ]]; then
-    export_args=(-allowProvisioningUpdates "${export_args[@]}")
+    export_args=(-allowProvisioningUpdates "${xcodebuild_auth_args[@]}" "${export_args[@]}")
   fi
 
   xcodebuild "${export_args[@]}"

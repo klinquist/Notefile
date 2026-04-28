@@ -3,6 +3,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LOCAL_RELEASE_ENV="$ROOT_DIR/scripts/release.local.env"
+
+if [[ -f "$LOCAL_RELEASE_ENV" ]]; then
+  source "$LOCAL_RELEASE_ENV"
+fi
+
 PROJECT_PATH="$ROOT_DIR/Notesync.xcodeproj"
 SCHEME="${SCHEME:-Notesync}"
 CONFIGURATION="${CONFIGURATION:-Release}"

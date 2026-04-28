@@ -3,6 +3,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LOCAL_RELEASE_ENV="$ROOT_DIR/scripts/release.local.env"
+
+if [[ -f "$LOCAL_RELEASE_ENV" ]]; then
+  source "$LOCAL_RELEASE_ENV"
+fi
+
 cd "$ROOT_DIR"
 
 if ! command -v gh >/dev/null 2>&1; then
@@ -35,17 +41,17 @@ TAG="v$VERSION"
 export SIGN_FOR_DISTRIBUTION="${SIGN_FOR_DISTRIBUTION:-1}"
 export NOTARIZE_DMG="${NOTARIZE_DMG:-1}"
 export ALLOW_PROVISIONING_UPDATES="${ALLOW_PROVISIONING_UPDATES:-1}"
-export NOTARYTOOL_KEYCHAIN_PROFILE="${NOTARYTOOL_KEYCHAIN_PROFILE:-notesync}"
-
-if [[ "$NOTARIZE_DMG" == "1" && -z "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]]; then
-  echo "release-github.sh expects NOTARYTOOL_KEYCHAIN_PROFILE in the environment for notarized releases." >&2
-  exit 1
-fi
+export NOTARYTOOL_KEYCHAIN_PROFILE="${NOTARYTOOL_KEYCHAIN_PROFILE:-}"
 
 if [[ "$NOTARIZE_DMG" == "1" ]]; then
-  if ! xcrun notarytool history --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE" >/dev/null 2>&1; then
-    echo "Could not use notarytool keychain profile '$NOTARYTOOL_KEYCHAIN_PROFILE'." >&2
-    echo "Store credentials with: xcrun notarytool store-credentials $NOTARYTOOL_KEYCHAIN_PROFILE --key <path> --key-id <key-id> --validate" >&2
+  if [[ -n "${ASC_KEY_PATH:-}" || -n "${ASC_KEY_ID:-}" || -n "${ASC_ISSUER_ID:-}" ]]; then
+    if [[ -z "${ASC_KEY_PATH:-}" || -z "${ASC_KEY_ID:-}" || -z "${ASC_ISSUER_ID:-}" ]]; then
+      echo "ASC_KEY_PATH, ASC_KEY_ID, and ASC_ISSUER_ID must be set together for notarized releases." >&2
+      exit 1
+    fi
+  elif [[ -z "$NOTARYTOOL_KEYCHAIN_PROFILE" ]]; then
+    echo "Notarized releases require ASC_KEY_PATH, ASC_KEY_ID, and ASC_ISSUER_ID." >&2
+    echo "Alternatively set NOTARYTOOL_KEYCHAIN_PROFILE to use a stored notarytool profile." >&2
     exit 1
   fi
 fi

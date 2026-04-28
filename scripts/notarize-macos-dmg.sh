@@ -3,15 +3,22 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LOCAL_RELEASE_ENV="$ROOT_DIR/scripts/release.local.env"
+
+if [[ -f "$LOCAL_RELEASE_ENV" ]]; then
+  source "$LOCAL_RELEASE_ENV"
+fi
+
 PROJECT_PATH="$ROOT_DIR/Notesync.xcodeproj"
 APP_NAME="Notesync"
-NOTARYTOOL_KEYCHAIN_PROFILE="${NOTARYTOOL_KEYCHAIN_PROFILE:-notesync}"
+NOTARYTOOL_KEYCHAIN_PROFILE="${NOTARYTOOL_KEYCHAIN_PROFILE:-}"
 DEVELOPER_ID_APPLICATION_IDENTITY="${DEVELOPER_ID_APPLICATION_IDENTITY:-Developer ID Application}"
 SIGN_DMG="${SIGN_DMG:-1}"
 SCRIPT_NAME="$(basename "$0")"
 
 usage() {
-  echo "Usage: NOTARYTOOL_KEYCHAIN_PROFILE=notesync ./scripts/$SCRIPT_NAME [path-to-dmg]" >&2
+  echo "Usage: ASC_KEY_PATH=/path/AuthKey_XXXXXXXXXX.p8 ASC_KEY_ID=XXXXXXXXXX ASC_ISSUER_ID=uuid ./scripts/$SCRIPT_NAME [path-to-dmg]" >&2
+  echo "   or: NOTARYTOOL_KEYCHAIN_PROFILE=notesync ./scripts/$SCRIPT_NAME [path-to-dmg]" >&2
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -40,8 +47,24 @@ PY
 
 DMG_PATH="${1:-$ROOT_DIR/dist/${APP_NAME}-${MARKETING_VERSION}-macOS.dmg}"
 
-if [[ -z "$NOTARYTOOL_KEYCHAIN_PROFILE" ]]; then
-  echo "NOTARYTOOL_KEYCHAIN_PROFILE is required." >&2
+notarytool_auth_args=()
+if [[ -n "${ASC_KEY_PATH:-}" || -n "${ASC_KEY_ID:-}" || -n "${ASC_ISSUER_ID:-}" ]]; then
+  if [[ -z "${ASC_KEY_PATH:-}" || -z "${ASC_KEY_ID:-}" || -z "${ASC_ISSUER_ID:-}" ]]; then
+    echo "ASC_KEY_PATH, ASC_KEY_ID, and ASC_ISSUER_ID must be set together." >&2
+    exit 1
+  fi
+
+  notarytool_auth_args=(
+    --key "$ASC_KEY_PATH"
+    --key-id "$ASC_KEY_ID"
+    --issuer "$ASC_ISSUER_ID"
+  )
+elif [[ -n "$NOTARYTOOL_KEYCHAIN_PROFILE" ]]; then
+  notarytool_auth_args=(
+    --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE"
+  )
+else
+  echo "Notarization credentials are required." >&2
   usage
   exit 1
 fi
@@ -58,16 +81,9 @@ fi
 
 codesign --verify --verbose=2 "$DMG_PATH"
 
-if ! xcrun notarytool history --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE" >/dev/null 2>&1; then
-  echo "Could not use notarytool keychain profile '$NOTARYTOOL_KEYCHAIN_PROFILE'." >&2
-  echo "Store credentials with:" >&2
-  echo "xcrun notarytool store-credentials $NOTARYTOOL_KEYCHAIN_PROFILE --apple-id <apple-id> --team-id <team-id> --validate" >&2
-  exit 1
-fi
-
 echo "Submitting $(basename "$DMG_PATH") for notarization"
 xcrun notarytool submit "$DMG_PATH" \
-  --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE" \
+  "${notarytool_auth_args[@]}" \
   --wait
 
 echo "Stapling notarization ticket"
