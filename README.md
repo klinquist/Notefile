@@ -105,18 +105,38 @@ NOTARYTOOL_KEYCHAIN_PROFILE=notesync \
 ./scripts/build-macos-dmg.sh
 ```
 
+To notarize an already-built DMG:
+
+```sh
+NOTARYTOOL_KEYCHAIN_PROFILE=notesync \
+./scripts/notarize-macos-dmg.sh dist/Notesync-1.6-macOS.dmg
+```
+
+The notarization helper signs the DMG first by default. Set `SIGN_DMG=0` if you need to submit an already-signed DMG without replacing its signature.
+
+If Developer ID signing fails with `errSecInternalComponent`, update the private key's partition list:
+
+```sh
+security set-key-partition-list \
+  -S apple-tool:,apple: \
+  -s -t private \
+  -k "<mac-login-password>" \
+  /Users/kris/Library/Keychains/login.keychain-db
+```
+
 Store notarization credentials in your keychain once with:
 
 ```sh
 xcrun notarytool store-credentials notesync \
-  --key "<path-to-api-key.p8>" \
-  --key-id "<key-id>" \
+  --apple-id "<apple-id>" \
+  --team-id "YYE9CDH9RT" \
   --validate
 ```
 
 Release notes:
 
 - `build-macos-dmg.sh` uses the project’s configured Developer Team by default
+- `DEVELOPER_ID_APPLICATION_IDENTITY` can be set to a specific Developer ID certificate name or hash
 - `release-github.sh` requires a clean git working tree
 - `release-github.sh` defaults to signed and notarized release builds with the `notesync` notarytool profile
 - `release-github.sh` uses the `gh` CLI to create or update the GitHub release

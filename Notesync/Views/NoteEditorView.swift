@@ -165,7 +165,7 @@ struct NoteEditorView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
         }
-        .task(id: notePath) {
+        .task(id: noteLoadID) {
             hasAppliedInitialFocus = false
             await loadNote()
             startFileChangeMonitor()
@@ -246,11 +246,11 @@ struct NoteEditorView: View {
             .onAppear {
                 guard !hasAppliedInitialFocus else { return }
                 hasAppliedInitialFocus = true
-                focusAndRevealNewestEntry(using: proxy, targetEntryID: focusedEntryID ?? note.entries.last?.id)
+                focusAndRevealNewestEntry(using: proxy, targetEntryID: initialFocusEntry(in: note), force: true)
             }
             .onChange(of: draft?.entries.last?.id) { _, newValue in
                 guard let newValue else { return }
-                focusAndRevealNewestEntry(using: proxy, targetEntryID: newValue)
+                focusAndRevealNewestEntry(using: proxy, targetEntryID: newValue, force: true)
             }
         }
     }
@@ -319,9 +319,7 @@ struct NoteEditorView: View {
             draft = note
             lastSavedDraft = note
             lastDiskModifiedAt = try repository.noteModificationDate(relativePath: note.relativePath)
-            let preferredFocusEntryID = initialFocusEntryID.flatMap { targetEntryID in
-                note.entries.contains(where: { $0.id == targetEntryID }) ? targetEntryID : nil
-            }
+            let preferredFocusEntryID = initialFocusEntry(in: note)
             focusedEntryID = preferredFocusEntryID ?? note.entries.last?.id
 #if !os(iOS)
             focusedMacEntryID = preferredFocusEntryID ?? note.entries.last?.id
@@ -331,6 +329,19 @@ struct NoteEditorView: View {
             draft = nil
             loadError = error.localizedDescription
         }
+    }
+
+    private var noteLoadID: String {
+        "\(notePath)#\(initialFocusEntryID?.uuidString ?? "latest")"
+    }
+
+    private func initialFocusEntry(in note: NoteDocument) -> NoteEntry.ID? {
+        if let initialFocusEntryID,
+           note.entries.contains(where: { $0.id == initialFocusEntryID }) {
+            return initialFocusEntryID
+        }
+
+        return note.entries.last?.id
     }
 
     private func deleteEntry(at index: Int) {
@@ -459,7 +470,7 @@ struct NoteEditorView: View {
         }
     }
 
-    private func focusAndRevealNewestEntry(using proxy: ScrollViewProxy, targetEntryID: NoteEntry.ID? = nil) {
+    private func focusAndRevealNewestEntry(using proxy: ScrollViewProxy, targetEntryID: NoteEntry.ID? = nil, force: Bool = false) {
         guard let entryID = targetEntryID ?? draft?.entries.last?.id else { return }
 
         focusTask?.cancel()
@@ -475,7 +486,13 @@ struct NoteEditorView: View {
 
             // Run a second pass after the keyboard starts animating so the active editor stays visible.
             try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled, focusedEntryID == entryID else { return }
+            guard !Task.isCancelled else { return }
+            if !force, focusedEntryID != entryID { return }
+
+            focusedEntryID = entryID
+#if !os(iOS)
+            focusedMacEntryID = entryID
+#endif
 
             withAnimation {
                 proxy.scrollTo(entryID, anchor: .top)
@@ -811,6 +828,7 @@ struct NoteEditorView: View {
     private func entryEditor(for entry: NoteEntry, index: Int) -> some View {
         #if os(iOS)
         let isNewestEntry = index == (draft?.entries.count ?? 0) - 1
+        let isExpandedEntry = isNewestEntry || focusedEntryID == entry.id
         IOSNoteTextView(
             text: entryTextBinding(at: index),
             font: noteFont.uiFont(size: resolvedNoteFontSize),
@@ -825,32 +843,33 @@ struct NoteEditorView: View {
                 }
             )
         )
-        .frame(height: estimatedEntryHeight(for: entry.text, isNewestEntry: isNewestEntry))
+        .frame(height: estimatedEntryHeight(for: entry.text, isExpandedEntry: isExpandedEntry))
         #else
         let isNewestEntry = index == (draft?.entries.count ?? 0) - 1
+        let isExpandedEntry = isNewestEntry || focusedMacEntryID == entry.id || focusedEntryID == entry.id
         TextEditor(text: entryTextBinding(at: index))
             .focused($focusedMacEntryID, equals: entry.id)
             .font(noteFont.swiftUIFont(size: resolvedNoteFontSize))
-            .frame(height: estimatedEntryHeight(for: entry.text, isNewestEntry: isNewestEntry, minimumHeight: 56, extraPadding: 10))
+            .frame(height: estimatedEntryHeight(for: entry.text, isExpandedEntry: isExpandedEntry, minimumHeight: 56, expandedMinimumHeight: 180, extraPadding: 10))
         #endif
     }
 
     private func estimatedEntryHeight(
         for text: String,
-        isNewestEntry: Bool,
+        isExpandedEntry: Bool,
         minimumHeight: CGFloat = 64,
+        expandedMinimumHeight: CGFloat = 180,
         extraPadding: CGFloat = 28
     ) -> CGFloat {
-        if isNewestEntry {
-            return 180
-        }
-
         let trimmed = text.trimmingCharacters(in: .newlines)
-        guard !trimmed.isEmpty else { return minimumHeight }
+        guard !trimmed.isEmpty else {
+            return isExpandedEntry ? expandedMinimumHeight : minimumHeight
+        }
 
         let lineCount = max(trimmed.components(separatedBy: .newlines).count, 1)
         let lineHeight = platformLineHeight(for: resolvedNoteFontSize)
-        return max(minimumHeight, ceil(CGFloat(lineCount) * lineHeight + extraPadding - lineHeight))
+        let contentHeight = ceil(CGFloat(lineCount) * lineHeight + extraPadding)
+        return max(isExpandedEntry ? expandedMinimumHeight : minimumHeight, contentHeight)
     }
 
     private func platformLineHeight(for fontSize: Double) -> CGFloat {
@@ -878,7 +897,7 @@ private struct IOSNoteTextView: UIViewRepresentable {
     @Binding var isFocused: Bool
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
+        Coordinator(text: $text, isFocused: $isFocused)
     }
 
     func makeUIView(context: Context) -> UITextView {
@@ -907,6 +926,9 @@ private struct IOSNoteTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UITextView, context: Context) {
+        context.coordinator.text = $text
+        context.coordinator.isFocused = $isFocused
+
         if uiView.text != text {
             uiView.text = text
         }
@@ -917,7 +939,9 @@ private struct IOSNoteTextView: UIViewRepresentable {
 
         if isFocused {
             if !uiView.isFirstResponder {
+                context.coordinator.isApplyingProgrammaticFocus = true
                 uiView.becomeFirstResponder()
+                context.coordinator.isApplyingProgrammaticFocus = false
                 let end = uiView.endOfDocument
                 uiView.selectedTextRange = uiView.textRange(from: end, to: end)
             }
@@ -927,10 +951,22 @@ private struct IOSNoteTextView: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
-        private let text: Binding<String>
+        var text: Binding<String>
+        var isFocused: Binding<Bool>
+        var isApplyingProgrammaticFocus = false
 
-        init(text: Binding<String>) {
+        init(text: Binding<String>, isFocused: Binding<Bool>) {
             self.text = text
+            self.isFocused = isFocused
+        }
+
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            guard !isApplyingProgrammaticFocus else { return }
+            isFocused.wrappedValue = true
+        }
+
+        func textViewDidEndEditing(_ textView: UITextView) {
+            isFocused.wrappedValue = false
         }
 
         func textViewDidChange(_ textView: UITextView) {

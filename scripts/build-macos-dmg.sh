@@ -15,8 +15,9 @@ EXPORT_OPTIONS_PLIST="$BUILD_ROOT/export-options.plist"
 SIGN_FOR_DISTRIBUTION="${SIGN_FOR_DISTRIBUTION:-0}"
 NOTARIZE_DMG="${NOTARIZE_DMG:-0}"
 ALLOW_PROVISIONING_UPDATES="${ALLOW_PROVISIONING_UPDATES:-0}"
-NOTARYTOOL_KEYCHAIN_PROFILE="${NOTARYTOOL_KEYCHAIN_PROFILE:-}"
+NOTARYTOOL_KEYCHAIN_PROFILE="${NOTARYTOOL_KEYCHAIN_PROFILE:-notesync}"
 DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}"
+DEVELOPER_ID_APPLICATION_IDENTITY="${DEVELOPER_ID_APPLICATION_IDENTITY:-Developer ID Application}"
 
 if [[ "$NOTARIZE_DMG" == "1" ]]; then
   SIGN_FOR_DISTRIBUTION="1"
@@ -64,6 +65,28 @@ DMG_PATH="$ROOT_DIR/dist/${APP_NAME}-${VERSION}-macOS.dmg"
 
 rm -rf "$BUILD_ROOT"
 mkdir -p "$EXPORT_DIR" "$DMG_STAGING_DIR" "$ROOT_DIR/dist"
+
+verify_developer_id_signing() {
+  local test_binary="$BUILD_ROOT/developer-id-codesign-check"
+  local test_log="$BUILD_ROOT/developer-id-codesign-check.log"
+
+  cp /bin/echo "$test_binary"
+
+  if ! codesign --force --sign "$DEVELOPER_ID_APPLICATION_IDENTITY" --timestamp=none "$test_binary" >"$test_log" 2>&1; then
+    cat "$test_log" >&2
+    echo "Developer ID signing preflight failed for identity '$DEVELOPER_ID_APPLICATION_IDENTITY'." >&2
+    echo "If the error is errSecInternalComponent, update the key partition list with:" >&2
+    echo "security set-key-partition-list -S apple-tool:,apple: -s -t private -k \"<mac-login-password>\" /Users/kris/Library/Keychains/login.keychain-db" >&2
+    echo "You can also set DEVELOPER_ID_APPLICATION_IDENTITY to a specific certificate hash or full identity name." >&2
+    exit 1
+  fi
+
+  rm -f "$test_binary" "$test_log"
+}
+
+if [[ "$SIGN_FOR_DISTRIBUTION" == "1" ]]; then
+  verify_developer_id_signing
+fi
 
 archive_args=(
   -project "$PROJECT_PATH"
@@ -118,6 +141,8 @@ if [[ "$SIGN_FOR_DISTRIBUTION" == "1" ]]; then
   <string>developer-id</string>
   <key>signingStyle</key>
   <string>automatic</string>
+  <key>signingCertificate</key>
+  <string>${DEVELOPER_ID_APPLICATION_IDENTITY}</string>
   <key>stripSwiftSymbols</key>
   <true/>
   <key>teamID</key>
@@ -149,7 +174,10 @@ fi
 
 if [[ "$SIGN_FOR_DISTRIBUTION" == "1" ]]; then
   codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-  spctl -a -t exec -vv "$APP_PATH"
+
+  if [[ "$NOTARIZE_DMG" != "1" ]]; then
+    spctl -a -t exec -vv "$APP_PATH"
+  fi
 fi
 
 rm -rf "$DMG_STAGING_DIR"
@@ -166,18 +194,7 @@ hdiutil create \
   "$DMG_PATH" >/dev/null
 
 if [[ "$NOTARIZE_DMG" == "1" ]]; then
-  if [[ -z "$NOTARYTOOL_KEYCHAIN_PROFILE" ]]; then
-    echo "Notarization requested but NOTARYTOOL_KEYCHAIN_PROFILE is not set." >&2
-    exit 1
-  fi
-
-  echo "Submitting DMG for notarization"
-  xcrun notarytool submit "$DMG_PATH" \
-    --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE" \
-    --wait
-
-  xcrun stapler staple "$DMG_PATH"
-  xcrun stapler validate "$DMG_PATH"
+  "$ROOT_DIR/scripts/notarize-macos-dmg.sh" "$DMG_PATH"
 fi
 
 echo "Built app: $APP_PATH"

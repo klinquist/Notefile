@@ -434,6 +434,20 @@ struct RootView: View {
         }
     }
 
+    enum ViewMode: String, CaseIterable, Identifiable {
+        case browse
+        case timeline
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .browse: "Browse"
+            case .timeline: "Timeline"
+            }
+        }
+    }
+
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var repository: NoteRepository
     @State private var path: [Route] = []
@@ -444,6 +458,7 @@ struct RootView: View {
     @State private var itemPendingDeletion: BrowserItem?
     @State private var itemPendingEdit: BrowserItem?
     @State private var browserRefreshTask: Task<Void, Never>?
+    @AppStorage("RootView.ViewMode") private var viewModeRawValue = ViewMode.browse.rawValue
     @AppStorage("RootView.SortMode") private var sortModeRawValue = SortMode.alphabetical.rawValue
 
     var body: some View {
@@ -455,9 +470,13 @@ struct RootView: View {
                 subtitle: currentFolderName == nil ? repository.storageDescription : nil,
                 items: sortedItems(in: currentFolderPath),
                 favoriteItems: sortedFavoriteItems,
+                timelineEntries: viewMode == .timeline ? timelineEntries(in: currentFolderPath) : [],
+                viewMode: viewMode,
+                viewModeSelection: viewModeSelection,
                 sortMode: sortMode,
                 sortSelection: sortSelection,
                 onSelect: openItem,
+                onSelectTimelineEntry: openTimelineEntry,
                 onRequestEdit: { itemPendingEdit = $0 },
                 onRequestDelete: { itemPendingDeletion = $0 },
                 onToggleFavorite: toggleFavorite,
@@ -465,6 +484,7 @@ struct RootView: View {
                 onCreateNote: { showingCreateNote = true },
                 onOpenSettings: { showingSettings = true },
                 onOpenSearch: { showingSearch = true },
+                onGoToTimelineParentScope: nil,
                 onSelectSearchResult: openSearchResult,
                 onRenameTitle: nil
             )
@@ -481,9 +501,13 @@ struct RootView: View {
                         subtitle: nil,
                         items: sortedItems(in: relativePath),
                         favoriteItems: [],
+                        timelineEntries: viewMode == .timeline ? timelineEntries(in: relativePath) : [],
+                        viewMode: viewMode,
+                        viewModeSelection: viewModeSelection,
                         sortMode: sortMode,
                         sortSelection: sortSelection,
                         onSelect: openItem,
+                        onSelectTimelineEntry: openTimelineEntry,
                         onRequestEdit: { itemPendingEdit = $0 },
                         onRequestDelete: { itemPendingDeletion = $0 },
                         onToggleFavorite: toggleFavorite,
@@ -491,6 +515,9 @@ struct RootView: View {
                         onCreateNote: { showingCreateNote = true },
                         onOpenSettings: nil,
                         onOpenSearch: nil,
+                        onGoToTimelineParentScope: {
+                            path = folderRouteChain(for: parentPath(for: relativePath))
+                        },
                         onSelectSearchResult: openSearchResult,
                         onRenameTitle: { newName in
                             try await renameFolder(relativePath: relativePath, to: newName)
@@ -621,6 +648,18 @@ struct RootView: View {
         }
     }
 
+    private var viewMode: ViewMode {
+        get { ViewMode(rawValue: viewModeRawValue) ?? .browse }
+        set { viewModeRawValue = newValue.rawValue }
+    }
+
+    private var viewModeSelection: Binding<ViewMode> {
+        Binding(
+            get: { viewMode },
+            set: { viewModeRawValue = $0.rawValue }
+        )
+    }
+
     private var sortMode: SortMode {
         get { SortMode(rawValue: sortModeRawValue) ?? .alphabetical }
         set { sortModeRawValue = newValue.rawValue }
@@ -700,6 +739,42 @@ struct RootView: View {
         return nil
     }
 
+    private func timelineEntries(in folderPath: String?) -> [TimelineEntry] {
+        timelineNoteItems(in: folderPath).flatMap { item -> [TimelineEntry] in
+            guard let note = try? repository.loadNote(relativePath: item.relativePath) else { return [] }
+
+            return note.entries
+                .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .map { entry in
+                    TimelineEntry(
+                        noteRelativePath: item.relativePath,
+                        noteTitle: item.name,
+                        noteEmoji: item.emoji,
+                        accentStyle: item.accentStyle,
+                        entryID: entry.id,
+                        timestamp: entry.timestamp,
+                        text: entry.text,
+                        pathLabel: timelinePathLabel(for: item.relativePath)
+                    )
+                }
+        }
+        .sorted { lhs, rhs in
+            if lhs.timestamp != rhs.timestamp {
+                return lhs.timestamp > rhs.timestamp
+            }
+            return lhs.pathLabel.localizedCaseInsensitiveCompare(rhs.pathLabel) == .orderedAscending
+        }
+    }
+
+    private func timelineNoteItems(in folderPath: String?) -> [BrowserItem] {
+        let sourceItems = itemsInFolder(folderPath)
+        return flattenedItems(sourceItems).filter { $0.kind == .note }
+    }
+
+    private func timelinePathLabel(for relativePath: String) -> String {
+        (relativePath as NSString).deletingPathExtension
+    }
+
     private var selectedFolderName: String? {
         currentFolderName
     }
@@ -725,6 +800,12 @@ struct RootView: View {
         case .note:
             path.append(.note(item.relativePath, nil))
         }
+    }
+
+    private func openTimelineEntry(_ entry: TimelineEntry) {
+        var routes = folderRouteChain(for: parentPath(for: entry.noteRelativePath))
+        routes.append(.note(entry.noteRelativePath, entry.entryID))
+        path = routes
     }
 
     private func openSearchResult(_ result: NoteSearchResult) {
@@ -901,9 +982,13 @@ private struct BrowserGridScreen: View {
     let subtitle: String?
     let items: [BrowserItem]
     let favoriteItems: [BrowserItem]
+    let timelineEntries: [TimelineEntry]
+    let viewMode: RootView.ViewMode
+    let viewModeSelection: Binding<RootView.ViewMode>
     let sortMode: RootView.SortMode
     let sortSelection: Binding<RootView.SortMode>
     let onSelect: (BrowserItem) -> Void
+    let onSelectTimelineEntry: (TimelineEntry) -> Void
     let onRequestEdit: (BrowserItem) -> Void
     let onRequestDelete: (BrowserItem) -> Void
     let onToggleFavorite: (BrowserItem) -> Void
@@ -911,6 +996,7 @@ private struct BrowserGridScreen: View {
     let onCreateNote: () -> Void
     let onOpenSettings: (() -> Void)?
     let onOpenSearch: (() -> Void)?
+    let onGoToTimelineParentScope: (() -> Void)?
     let onSelectSearchResult: ((NoteSearchResult) -> Void)?
     let onRenameTitle: ((String) async throws -> Void)?
 
@@ -940,8 +1026,18 @@ private struct BrowserGridScreen: View {
 
                 sortHeader
 
+                if viewMode == .timeline, !isRoot {
+                    scopedTimelineMessage
+                }
+
                 if isShowingSearchResults {
                     searchResultsContent
+                } else if viewMode == .timeline {
+                    if timelineEntries.isEmpty {
+                        timelineEmptyState
+                    } else {
+                        timelineContent
+                    }
                 } else {
                     if isRoot, !favoriteItems.isEmpty {
                         favoritesSection
@@ -1003,16 +1099,29 @@ private struct BrowserGridScreen: View {
 
 #if os(macOS)
             HStack(alignment: .center, spacing: 12) {
-                Picker("Sort", selection: Binding(
-                    get: { sortMode },
-                    set: { sortSelection.wrappedValue = $0 }
+                Picker("View", selection: Binding(
+                    get: { viewMode },
+                    set: { viewModeSelection.wrappedValue = $0 }
                 )) {
-                    ForEach(RootView.SortMode.allCases) { mode in
+                    ForEach(RootView.ViewMode.allCases) { mode in
                         Text(mode.label).tag(mode)
                     }
                 }
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 220)
+
+                if viewMode == .browse {
+                    Picker("Sort", selection: Binding(
+                        get: { sortMode },
+                        set: { sortSelection.wrappedValue = $0 }
+                    )) {
+                        ForEach(RootView.SortMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 220)
+                }
 
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
@@ -1071,55 +1180,157 @@ private struct BrowserGridScreen: View {
                 }
             }
 #else
-            HStack(spacing: 12) {
-                Picker("Sort", selection: Binding(
-                    get: { sortMode },
-                    set: { sortSelection.wrappedValue = $0 }
-                )) {
-                    ForEach(RootView.SortMode.allCases) { mode in
-                        Text(mode.label).tag(mode)
+            VStack(spacing: 10) {
+                HStack(spacing: 12) {
+                    Picker("View", selection: Binding(
+                        get: { viewMode },
+                        set: { viewModeSelection.wrappedValue = $0 }
+                    )) {
+                        ForEach(RootView.ViewMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
                     }
-                }
-                .pickerStyle(.segmented)
+                    .pickerStyle(.segmented)
 
 #if os(iOS)
-                if let onOpenSettings {
-                    Button {
-                        onOpenSettings()
-                    } label: {
-                        Image(systemName: "gearshape")
+                    if let onOpenSettings {
+                        Button {
+                            onOpenSettings()
+                        } label: {
+                            Image(systemName: "gearshape")
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
-                }
 #endif
+                }
+
+                if viewMode == .browse {
+                    Picker("Sort", selection: Binding(
+                        get: { sortMode },
+                        set: { sortSelection.wrappedValue = $0 }
+                    )) {
+                        ForEach(RootView.SortMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
 
 #if os(macOS)
-                Button {
-                    onCreateFolder()
-                } label: {
-                    Image(systemName: "folder.badge.plus")
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    onCreateNote()
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                }
-                .buttonStyle(.borderedProminent)
-
-                if let onOpenSettings {
+                HStack(spacing: 12) {
                     Button {
-                        onOpenSettings()
+                        onCreateFolder()
                     } label: {
-                        Image(systemName: "gearshape")
+                        Image(systemName: "folder.badge.plus")
                     }
                     .buttonStyle(.bordered)
+
+                    Button {
+                        onCreateNote()
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    if let onOpenSettings {
+                        Button {
+                            onOpenSettings()
+                        } label: {
+                            Image(systemName: "gearshape")
+                        }
+                        .buttonStyle(.bordered)
+                    }
                 }
 #endif
             }
 #endif
         }
+    }
+
+    private var scopedTimelineMessage: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "clock.arrow.circlepath")
+                .foregroundStyle(.secondary)
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("You are viewing timeline for \(title).")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let onGoToTimelineParentScope {
+                    Button {
+                        onGoToTimelineParentScope()
+                    } label: {
+                        Text(parentTimelineScopeActionLabel)
+                            .underline()
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
+                }
+            }
+        }
+        .font(.subheadline.weight(.semibold))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(scopedTimelineMessageBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private var parentTimelineScopeActionLabel: String {
+        guard let currentFolderRelativePath else {
+            return "Go to home"
+        }
+
+        let parent = (currentFolderRelativePath as NSString).deletingLastPathComponent
+        guard !parent.isEmpty, parent != "." else {
+            return "Go to home"
+        }
+
+        return "Go up to \((parent as NSString).lastPathComponent)"
+    }
+
+    private var scopedTimelineMessageBackground: Color {
+#if os(macOS)
+        Color(nsColor: .controlBackgroundColor)
+#else
+        Color(uiColor: .secondarySystemGroupedBackground)
+#endif
+    }
+
+    private var timelineContent: some View {
+        LazyVStack(spacing: 12) {
+            ForEach(timelineEntries) { entry in
+                Button {
+                    onSelectTimelineEntry(entry)
+                } label: {
+                    TimelineEntryRow(entry: entry)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var timelineEmptyState: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 36))
+                .foregroundStyle(.secondary)
+            Text("No Timeline Entries")
+                .font(.headline)
+            Text("This view will be populated with a reverse chronological list of note entries.")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
     }
 
     private var displayMode: BrowserDisplayMode {
@@ -1522,6 +1733,77 @@ private struct BrowserGridScreen: View {
         .shadow(color: .black.opacity(0.12), radius: 16, y: 8)
     }
 #endif
+}
+
+private struct TimelineEntry: Identifiable, Hashable {
+    let noteRelativePath: String
+    let noteTitle: String
+    let noteEmoji: String
+    let accentStyle: AccentStyle
+    let entryID: UUID
+    let timestamp: Date
+    let text: String
+    let pathLabel: String
+
+    var id: String { "\(noteRelativePath):\(entryID.uuidString)" }
+}
+
+private struct TimelineEntryRow: View {
+    let entry: TimelineEntry
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Text(entry.noteEmoji)
+                .font(.system(size: 26))
+                .frame(width: 42, height: 42)
+                .background(entry.accentStyle.color.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(entry.pathLabel)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 8)
+
+                    Text(MarkdownNoteCodec.displayDateFormatter.string(from: entry.timestamp))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(entry.accentStyle.color)
+                        .lineLimit(1)
+                }
+
+                Text(entryPreview)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(entry.accentStyle.color.opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(entry.accentStyle.color.opacity(0.16), lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var entryPreview: String {
+        let trimmed = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Empty entry" }
+
+        let lines = trimmed.components(separatedBy: .newlines)
+        let previewLines = lines.prefix(5)
+        let suffix = lines.count > previewLines.count ? "\n..." : ""
+        return previewLines.joined(separator: "\n") + suffix
+    }
 }
 
 private struct NoteSearchSheet: View {
