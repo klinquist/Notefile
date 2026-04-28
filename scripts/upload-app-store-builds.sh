@@ -16,6 +16,7 @@ TEAM_ID="${TEAM_ID:-YYE9CDH9RT}"
 BUILD_ROOT="${BUILD_ROOT:-$ROOT_DIR/dist/app-store}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-$ROOT_DIR/.derived-app-store}"
 UPLOAD_SYMBOLS="${UPLOAD_SYMBOLS:-0}"
+ALLOW_XCODE_ACCOUNT_AUTH="${ALLOW_XCODE_ACCOUNT_AUTH:-0}"
 
 IOS_ARCHIVE_PATH="$BUILD_ROOT/Notesync-iOS.xcarchive"
 MACOS_ARCHIVE_PATH="$BUILD_ROOT/Notesync-macOS.xcarchive"
@@ -31,11 +32,21 @@ if [[ -n "${ASC_KEY_PATH:-}" || -n "${ASC_KEY_ID:-}" || -n "${ASC_ISSUER_ID:-}" 
     exit 1
   fi
 
+  if [[ ! -f "$ASC_KEY_PATH" ]]; then
+    echo "ASC_KEY_PATH does not point to a file: $ASC_KEY_PATH" >&2
+    exit 1
+  fi
+
   auth_args=(
     -authenticationKeyPath "$ASC_KEY_PATH"
     -authenticationKeyID "$ASC_KEY_ID"
     -authenticationKeyIssuerID "$ASC_ISSUER_ID"
   )
+elif [[ "$ALLOW_XCODE_ACCOUNT_AUTH" != "1" ]]; then
+  echo "App Store uploads require ASC_KEY_PATH, ASC_KEY_ID, and ASC_ISSUER_ID." >&2
+  echo "Set them in scripts/release.local.env to avoid using Xcode account login state." >&2
+  echo "Set ALLOW_XCODE_ACCOUNT_AUTH=1 only if you intentionally want xcodebuild to use Xcode Accounts." >&2
+  exit 1
 fi
 
 ensure_no_export_compliance_needed() {

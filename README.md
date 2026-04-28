@@ -119,6 +119,8 @@ To upload iOS and macOS App Store Connect builds without relying on Xcode's acco
 ./scripts/upload-app-store-builds.sh
 ```
 
+`upload-app-store-builds.sh` requires the App Store Connect API key values by default. It will not fall back to Xcode Accounts unless `ALLOW_XCODE_ACCOUNT_AUTH=1` is set explicitly.
+
 If Developer ID signing fails with `errSecInternalComponent`, update the private key's partition list:
 
 ```sh
