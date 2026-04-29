@@ -248,8 +248,13 @@ final class LocalMirrorSyncService: ObservableObject {
                         try createDirectoryIfNeeded(relativePath, under: mirroredFolderURL)
                     }
                 } else if currentLocalSnapshot.directories.contains(relativePath) {
-                    logger.info("syncNow createCloudDirectoryFromPreservedLocal relativePath=\(relativePath, privacy: .public)")
-                    try await repository.importFolder(relativePath: relativePath)
+                    if survivingDirectoryMatchesPreviousLocal(relativePath: relativePath, snapshot: currentLocalSnapshot, previousDirectoryStates: previousDirectoryStates) {
+                        logger.notice("syncNow deleteLocalDirectory relativePath=\(relativePath, privacy: .public)")
+                        try removeItemIfExists(at: mirroredFolderURL.appendingPathComponent(relativePath, isDirectory: true))
+                    } else {
+                        logger.info("syncNow createCloudDirectoryFromChangedLocal relativePath=\(relativePath, privacy: .public)")
+                        try await repository.importFolder(relativePath: relativePath)
+                    }
                 }
             }
 
@@ -689,6 +694,18 @@ final class LocalMirrorSyncService: ObservableObject {
         previousDirectoryStates: [String: SyncDirectoryState]
     ) -> Bool {
         guard let previousIdentifier = previousDirectoryStates[relativePath]?.cloudIdentifier,
+              let currentIdentifier = snapshot.directoryIdentifiers[relativePath] else {
+            return false
+        }
+        return previousIdentifier == currentIdentifier
+    }
+
+    private func survivingDirectoryMatchesPreviousLocal(
+        relativePath: String,
+        snapshot: MirrorSnapshot,
+        previousDirectoryStates: [String: SyncDirectoryState]
+    ) -> Bool {
+        guard let previousIdentifier = previousDirectoryStates[relativePath]?.localIdentifier,
               let currentIdentifier = snapshot.directoryIdentifiers[relativePath] else {
             return false
         }
