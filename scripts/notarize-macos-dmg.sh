@@ -16,6 +16,27 @@ DEVELOPER_ID_APPLICATION_IDENTITY="${DEVELOPER_ID_APPLICATION_IDENTITY:-Develope
 SIGN_DMG="${SIGN_DMG:-1}"
 SCRIPT_NAME="$(basename "$0")"
 
+resolve_developer_id_identity() {
+  if [[ "$DEVELOPER_ID_APPLICATION_IDENTITY" != "Developer ID Application" ]]; then
+    return
+  fi
+
+  local resolved_identity
+  resolved_identity="$(
+    security find-identity -v -p codesigning 2>/dev/null |
+      awk '/"Developer ID Application:/ { print $2; exit }'
+  )"
+
+  if [[ -z "$resolved_identity" ]]; then
+    echo "Could not find a valid Developer ID Application signing identity." >&2
+    echo "Set DEVELOPER_ID_APPLICATION_IDENTITY to a certificate SHA-1 hash or full identity name." >&2
+    exit 1
+  fi
+
+  DEVELOPER_ID_APPLICATION_IDENTITY="$resolved_identity"
+  echo "Resolved Developer ID signing identity: $DEVELOPER_ID_APPLICATION_IDENTITY"
+}
+
 usage() {
   echo "Usage: ASC_KEY_PATH=/path/AuthKey_XXXXXXXXXX.p8 ASC_KEY_ID=XXXXXXXXXX ASC_ISSUER_ID=uuid ./scripts/$SCRIPT_NAME [path-to-dmg]" >&2
   echo "   or: NOTARYTOOL_KEYCHAIN_PROFILE=notesync ./scripts/$SCRIPT_NAME [path-to-dmg]" >&2
@@ -75,6 +96,7 @@ if [[ ! -f "$DMG_PATH" ]]; then
 fi
 
 if [[ "$SIGN_DMG" == "1" ]]; then
+  resolve_developer_id_identity
   echo "Signing $(basename "$DMG_PATH")"
   codesign --force --sign "$DEVELOPER_ID_APPLICATION_IDENTITY" --timestamp "$DMG_PATH"
 fi

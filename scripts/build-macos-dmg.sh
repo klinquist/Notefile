@@ -25,6 +25,27 @@ NOTARYTOOL_KEYCHAIN_PROFILE="${NOTARYTOOL_KEYCHAIN_PROFILE:-}"
 DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}"
 DEVELOPER_ID_APPLICATION_IDENTITY="${DEVELOPER_ID_APPLICATION_IDENTITY:-Developer ID Application}"
 
+resolve_developer_id_identity() {
+  if [[ "$DEVELOPER_ID_APPLICATION_IDENTITY" != "Developer ID Application" ]]; then
+    return
+  fi
+
+  local resolved_identity
+  resolved_identity="$(
+    security find-identity -v -p codesigning 2>/dev/null |
+      awk '/"Developer ID Application:/ { print $2; exit }'
+  )"
+
+  if [[ -z "$resolved_identity" ]]; then
+    echo "Could not find a valid Developer ID Application signing identity." >&2
+    echo "Set DEVELOPER_ID_APPLICATION_IDENTITY to a certificate SHA-1 hash or full identity name." >&2
+    exit 1
+  fi
+
+  DEVELOPER_ID_APPLICATION_IDENTITY="$resolved_identity"
+  echo "Resolved Developer ID signing identity: $DEVELOPER_ID_APPLICATION_IDENTITY"
+}
+
 xcodebuild_auth_args=()
 if [[ -n "${ASC_KEY_PATH:-}" || -n "${ASC_KEY_ID:-}" || -n "${ASC_ISSUER_ID:-}" ]]; then
   if [[ -z "${ASC_KEY_PATH:-}" || -z "${ASC_KEY_ID:-}" || -z "${ASC_ISSUER_ID:-}" ]]; then
@@ -105,6 +126,7 @@ verify_developer_id_signing() {
 }
 
 if [[ "$SIGN_FOR_DISTRIBUTION" == "1" ]]; then
+  resolve_developer_id_identity
   verify_developer_id_signing
 fi
 
