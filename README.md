@@ -12,6 +12,8 @@
   </tr>
 </table>
 
+Download Notesync.md for iOS and macOS from the [App Store](https://apps.apple.com/us/app/notesync-md/id6763802260).
+
 ## Demo
 
 [![Notesync.md demo video](https://img.youtube.com/vi/62TmqrJ-7AU/maxresdefault.jpg)](https://www.youtube.com/watch?v=62TmqrJ-7AU)
